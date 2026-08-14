@@ -61,7 +61,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
         // IPv6 Settings
         let isIPv6Enabled = sharedDefaults.bool(forKey: "setting_ipv6")
         if isIPv6Enabled {
-            let ipv6Settings = NEIPv6Settings(addresses: ["fc00::1"], prefixLengths: [64])
+            let ipv6Settings = NEIPv6Settings(addresses: ["fc00::1"], networkPrefixLengths: [NSNumber(value: 64)])
             ipv6Settings.includedRoutes = [NEIPv6Route.default()]
             settings.ipv6Settings = ipv6Settings
             SharedLogging.log("IPv6 tunneling enabled.", category: .vpn)
@@ -108,7 +108,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
             var configYml = """
             tunnel:
               name: tun0
-              mtu: \(settings.mtu.intValue)
+              mtu: \(settings.mtu?.intValue ?? 9000)
               ipv4: 198.18.0.1
             """
             
@@ -165,9 +165,6 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
     
     public override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLogging.log("Stopping Packet Tunnel Provider... Reason: \(reason.rawValue)", category: .vpn)
-        
-        // Stop the blocking C engine first — this unblocks the tunnel thread
-        Socks5Tunnel.stop()
         
         localProxy?.stop()
         localProxy = nil
