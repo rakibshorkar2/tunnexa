@@ -52,9 +52,14 @@ def create_project():
 		110000010001000100000012 /* Tun2SocksKit in Frameworks */ = {isa = PBXBuildFile; productRef = 330000020002000200000002 /* Tun2SocksKit */; };
 		110000010001000100000013 /* YAMLParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000001 /* YAMLParserTests.swift */; };
 		110000010001000100000014 /* RoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000002 /* RoutingTests.swift */; };
+		11000001000100010000001D /* VPNManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000004 /* VPNManagerTests.swift */; };
 		110000010001000100000015 /* ProxyHealthTester.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000015 /* ProxyHealthTester.swift */; };
 		110000010001000100000017 /* AddProxySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000017 /* AddProxySheet.swift */; };
 		110000010001000100000018 /* ImportConfigSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000018 /* ImportConfigSheet.swift */; };
+		110000010001000100000019 /* VPNEnvironmentDetector.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000019 /* VPNEnvironmentDetector.swift */; };
+		11000001000100010000001A /* VPNEnvironmentDetector.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000019 /* VPNEnvironmentDetector.swift */; };
+		11000001000100010000001B /* VPNErrorDetails.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001A /* VPNErrorDetails.swift */; };
+		11000001000100010000001C /* VPNErrorDetails.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001A /* VPNErrorDetails.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,7 +105,10 @@ def create_project():
 		220000020002000200000002 /* Tunnexa.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tunnexa.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		440000020002000200000001 /* YAMLParserTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = YAMLParserTests.swift; sourceTree = "<group>"; };
 		440000020002000200000002 /* RoutingTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = RoutingTests.swift; sourceTree = "<group>"; };
+		440000020002000200000004 /* VPNManagerTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VPNManagerTests.swift; sourceTree = "<group>"; };
 		440000020002000200000003 /* TunnexaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TunnexaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		110000020002000200000019 /* VPNEnvironmentDetector.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VPNEnvironmentDetector.swift; sourceTree = "<group>"; };
+		11000002000200020000001A /* VPNErrorDetails.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VPNErrorDetails.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,6 +154,8 @@ def create_project():
 				110000020002000200000001 /* SharedModels.swift */,
 				110000020002000200000002 /* SharedLogging.swift */,
 				110000020002000200000004 /* KeychainHelper.swift */,
+				110000020002000200000019 /* VPNEnvironmentDetector.swift */,
+				11000002000200020000001A /* VPNErrorDetails.swift */,
 			);
 			name = Shared;
 			path = Shared;
@@ -235,6 +245,7 @@ def create_project():
 			children = (
 				440000020002000200000001 /* YAMLParserTests.swift */,
 				440000020002000200000002 /* RoutingTests.swift */,
+				440000020002000200000004 /* VPNManagerTests.swift */,
 			);
 			name = TunnexaTests;
 			path = TunnexaTests;
@@ -367,6 +378,8 @@ def create_project():
 				11000001000100010000000F /* SettingsView.swift in Sources */,
 				110000010001000100000017 /* AddProxySheet.swift in Sources */,
 				110000010001000100000018 /* ImportConfigSheet.swift in Sources */,
+				110000010001000100000019 /* VPNEnvironmentDetector.swift in Sources (App) */,
+				11000001000100010000001B /* VPNErrorDetails.swift in Sources (App) */,
 				110000010001000100000010 /* TunnexaApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -378,6 +391,8 @@ def create_project():
 				110000010001000100000002 /* SharedModels.swift in Sources (Extension) */,
 				110000010001000100000004 /* SharedLogging.swift in Sources (Extension) */,
 				110000010001000100000016 /* KeychainHelper.swift in Sources (Extension) */,
+				11000001000100010000001A /* VPNEnvironmentDetector.swift in Sources (Extension) */,
+				11000001000100010000001C /* VPNErrorDetails.swift in Sources (Extension) */,
 				110000010001000100000007 /* LocalProxyServer.swift in Sources */,
 				110000010001000100000008 /* PacketTunnelProvider.swift in Sources */,
 			);
@@ -389,6 +404,7 @@ def create_project():
 			files = (
 				110000010001000100000013 /* YAMLParserTests.swift in Sources */,
 				110000010001000100000014 /* RoutingTests.swift in Sources */,
+				11000001000100010000001D /* VPNManagerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

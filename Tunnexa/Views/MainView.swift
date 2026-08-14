@@ -198,13 +198,16 @@ struct MainView: View {
                 ImportConfigSheet()
                     .environmentObject(proxyViewModel)
             }
-            .alert("VPN Connection", isPresented: Binding(
-                get: { vpnViewModel.errorMessage != nil },
-                set: { if !$0 { vpnViewModel.errorMessage = nil } }
-            )) {
-                Button("OK") { vpnViewModel.errorMessage = nil }
+            .alert(
+                vpnViewModel.activeError?.environment == .liveContainer ? "Unsupported Environment" : "VPN Connection Alert",
+                isPresented: Binding(
+                    get: { vpnViewModel.activeError != nil },
+                    set: { if !$0 { vpnViewModel.activeError = nil } }
+                )
+            ) {
+                Button("OK") { vpnViewModel.activeError = nil }
             } message: {
-                Text(vpnViewModel.errorMessage ?? "")
+                Text(vpnViewModel.activeError?.userFriendlyExplanation ?? "")
             }
         }
     }

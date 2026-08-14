@@ -4,69 +4,140 @@ import Combine
 
 public class VPNManager: ObservableObject {
     public static let shared = VPNManager()
+    public static let targetProviderBundleIdentifier = "com.rakib.tunnexa.PacketTunnel"
     
     @Published public var status: NEVPNStatus = .disconnected
     @Published public var isEnabled: Bool = false
+    @Published public var lastError: VPNErrorDetails?
     
     private var manager: NETunnelProviderManager?
     private var cancellables = Set<AnyCancellable>()
+    private var isInitializing = false
     
     private init() {
+        SharedLogging.log("VPNManager initializing. Environment detected: \(VPNEnvironmentDetector.detectEnvironment().rawValue)", category: .vpn)
         loadProviderManager { [weak self] _ in
             self?.observeStatus()
         }
     }
     
-    public func loadProviderManager(completion: @escaping (Error?) -> Void) {
+    // MARK: - Profile Discovery & Loading
+    
+    public func loadProviderManager(completion: @escaping (Result<NETunnelProviderManager, VPNErrorDetails>) -> Void) {
+        let env = VPNEnvironmentDetector.detectEnvironment()
+        
+        // Fast-fail if in LiveContainer to avoid spamming system logs
+        if env == .liveContainer {
+            let errorDetails = VPNErrorDetails(
+                domain: "Tunnexa.Environment",
+                code: 100,
+                message: "LiveContainer guest runtime detected.",
+                failureReason: "LiveContainer cannot register iOS NetworkExtension Packet Tunnel app extensions.",
+                environment: .liveContainer
+            )
+            self.lastError = errorDetails
+            SharedLogging.log("VPN initialization aborted: LiveContainer guest environment.", category: .vpn)
+            completion(.failure(errorDetails))
+            return
+        }
+        
+        guard !isInitializing else { return }
+        isInitializing = true
+        
+        SharedLogging.log("Querying iOS preferences for existing VPN profiles...", category: .vpn)
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self = self else { return }
+            self.isInitializing = false
+            
             if let error = error {
-                SharedLogging.log("Failed to load VPN profiles: \(error.localizedDescription)", category: .vpn)
-                completion(error)
+                let errorDetails = VPNErrorDetails(error: error, environment: env)
+                self.lastError = errorDetails
+                SharedLogging.log("Failed to load VPN profiles from preferences: [\(errorDetails.domain) Code \(errorDetails.code)] \(errorDetails.message)", category: .vpn)
+                completion(.failure(errorDetails))
                 return
             }
             
-            if let managers = managers, let existingManager = managers.first {
+            // Search specifically for Tunnexa Packet Tunnel profile
+            if let managers = managers, let existingManager = self.findTunnexaManager(in: managers) {
                 self.manager = existingManager
                 self.status = existingManager.connection.status
                 self.isEnabled = existingManager.isEnabled
-                SharedLogging.log("Loaded existing VPN manager profile.", category: .vpn)
-                completion(nil)
+                SharedLogging.log("Reusing existing Tunnexa VPN profile ('\(existingManager.localizedDescription ?? "Tunnexa")'). Status: \(self.statusDescription(existingManager.connection.status))", category: .vpn)
+                completion(.success(existingManager))
             } else {
-                // Create a new manager
-                let newManager = NETunnelProviderManager()
-                let protocolConfig = NETunnelProviderProtocol()
+                // No profile exists yet — create fresh configuration
+                self.createNewManagerProfile(completion: completion)
+            }
+        }
+    }
+    
+    private func findTunnexaManager(in managers: [NETunnelProviderManager]) -> NETunnelProviderManager? {
+        return managers.first { manager in
+            guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return false }
+            return proto.providerBundleIdentifier == VPNManager.targetProviderBundleIdentifier
+        }
+    }
+    
+    private func createNewManagerProfile(completion: @escaping (Result<NETunnelProviderManager, VPNErrorDetails>) -> Void) {
+        SharedLogging.log("Creating new NETunnelProviderManager with bundle ID: \(VPNManager.targetProviderBundleIdentifier)", category: .vpn)
+        
+        let newManager = NETunnelProviderManager()
+        let protocolConfig = NETunnelProviderProtocol()
+        
+        protocolConfig.providerBundleIdentifier = VPNManager.targetProviderBundleIdentifier
+        protocolConfig.serverAddress = "127.0.0.1" // Loopback tunnel address
+        protocolConfig.username = "TunnexaUser"
+        
+        newManager.protocolConfiguration = protocolConfig
+        newManager.localizedDescription = "Tunnexa SOCKS5 VPN"
+        newManager.isEnabled = true
+        
+        newManager.saveToPreferences { [weak self] error in
+            guard let self = self else { return }
+            
+            if let error = error {
+                let errorDetails = VPNErrorDetails(error: error)
+                self.lastError = errorDetails
+                SharedLogging.log("Failed to save new VPN profile to preferences: [\(errorDetails.domain) Code \(errorDetails.code)] \(errorDetails.message)", category: .vpn)
+                completion(.failure(errorDetails))
+                return
+            }
+            
+            SharedLogging.log("Saved new profile to preferences. Reloading to obtain system handle...", category: .vpn)
+            
+            // Reload all profiles to get the system-persisted instance
+            NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, reloadError in
+                guard let self = self else { return }
                 
-                protocolConfig.providerBundleIdentifier = "com.rakib.tunnexa.PacketTunnel"
-                protocolConfig.serverAddress = "127.0.0.1" // Required server address
-                protocolConfig.username = "TunnexaUser"
+                if let reloadError = reloadError {
+                    let errorDetails = VPNErrorDetails(error: reloadError)
+                    self.lastError = errorDetails
+                    SharedLogging.log("Failed to reload preferences after saving: \(errorDetails.message)", category: .vpn)
+                    completion(.failure(errorDetails))
+                    return
+                }
                 
-                newManager.protocolConfiguration = protocolConfig
-                newManager.localizedDescription = "Tunnexa SOCKS5 VPN"
-                newManager.isEnabled = true
-                
-                newManager.saveToPreferences { error in
-                    if let error = error {
-                        SharedLogging.log("Failed to save new VPN manager profile: \(error.localizedDescription)", category: .vpn)
-                        completion(error)
-                        return
-                    }
-                    // Load again to fetch the finalized profile from preferences
-                    NETunnelProviderManager.loadAllFromPreferences { managers, error in
-                        if let managers = managers, let loadedManager = managers.first {
-                            self.manager = loadedManager
-                            self.status = loadedManager.connection.status
-                            self.isEnabled = loadedManager.isEnabled
-                            SharedLogging.log("Successfully created and loaded VPN manager profile.", category: .vpn)
-                            completion(nil)
-                        } else {
-                            completion(error ?? NSError(domain: "Tunnexa", code: 4, userInfo: [NSLocalizedDescriptionKey: "Failed to load saved VPN profile"]))
-                        }
-                    }
+                if let managers = managers, let loaded = self.findTunnexaManager(in: managers) {
+                    self.manager = loaded
+                    self.status = loaded.connection.status
+                    self.isEnabled = loaded.isEnabled
+                    SharedLogging.log("Successfully created, saved, and loaded Tunnexa VPN profile.", category: .vpn)
+                    completion(.success(loaded))
+                } else {
+                    let errorDetails = VPNErrorDetails(
+                        domain: "Tunnexa.Manager",
+                        code: 404,
+                        message: "Unable to locate saved Tunnexa profile after reload.",
+                        failureReason: "iOS preferences did not return the expected manager."
+                    )
+                    self.lastError = errorDetails
+                    completion(.failure(errorDetails))
                 }
             }
         }
     }
+    
+    // MARK: - Status Observation
     
     private func observeStatus() {
         NotificationCenter.default.publisher(for: .NEVPNStatusDidChange)
@@ -74,76 +145,84 @@ public class VPNManager: ObservableObject {
                 guard let self = self,
                       let connection = notification.object as? NEVPNConnection else { return }
                 self.status = connection.status
-                SharedLogging.log("VPN connection status changed to: \(self.statusDescription(connection.status))", category: .vpn)
+                SharedLogging.log("VPN status notification: \(self.statusDescription(connection.status))", category: .vpn)
             }
             .store(in: &cancellables)
     }
     
-    public func startVPN(completion: @escaping (Error?) -> Void) {
+    // MARK: - Connection Lifecycle
+    
+    public func startVPN(completion: @escaping (Result<Void, VPNErrorDetails>) -> Void) {
+        let env = VPNEnvironmentDetector.detectEnvironment()
+        
+        if env == .liveContainer {
+            let errorDetails = VPNErrorDetails(
+                domain: "Tunnexa.Environment",
+                code: 100,
+                message: "LiveContainer guest runtime cannot run system-wide VPN tunnels.",
+                environment: .liveContainer
+            )
+            self.lastError = errorDetails
+            completion(.failure(errorDetails))
+            return
+        }
+        
         if let manager = self.manager {
             self.startTunnel(with: manager, completion: completion)
         } else {
-            // Attempt on-demand load and save
-            self.loadProviderManager { [weak self] error in
+            SharedLogging.log("No cached manager profile. Initializing on demand before connection...", category: .vpn)
+            self.loadProviderManager { [weak self] result in
                 guard let self = self else { return }
-                if let error = error {
-                    let customError = NSError(
-                        domain: "Tunnexa",
-                        code: 5,
-                        userInfo: [NSLocalizedDescriptionKey: "VPN Permission Denied (\(error.localizedDescription)).\n\nLiveContainer does not allow guest apps to install NetworkExtension VPN profiles. Sideload Tunnexa directly using TrollStore, AltStore, or Sideloadly."]
-                    )
-                    completion(customError)
-                    return
-                }
-                
-                if let manager = self.manager {
-                    self.startTunnel(with: manager, completion: completion)
-                } else {
-                    let err = NSError(
-                        domain: "Tunnexa",
-                        code: 5,
-                        userInfo: [NSLocalizedDescriptionKey: "Unable to initialize VPN Profile on this environment."]
-                    )
-                    completion(err)
+                switch result {
+                case .success(let loadedManager):
+                    self.startTunnel(with: loadedManager, completion: completion)
+                case .failure(let errorDetails):
+                    completion(.failure(errorDetails))
                 }
             }
         }
     }
     
-    private func startTunnel(with manager: NETunnelProviderManager, completion: @escaping (Error?) -> Void) {
+    private func startTunnel(with manager: NETunnelProviderManager, completion: @escaping (Result<Void, VPNErrorDetails>) -> Void) {
+        SharedLogging.log("Starting VPN tunnel with provider: \(manager.localizedDescription ?? "Tunnexa")", category: .vpn)
+        
         if !manager.isEnabled {
             manager.isEnabled = true
-            manager.saveToPreferences { error in
+            manager.saveToPreferences { [weak self] error in
+                guard let self = self else { return }
                 if let error = error {
-                    SharedLogging.log("Failed to enable VPN profile: \(error.localizedDescription)", category: .vpn)
-                    completion(error)
-                } else {
-                    do {
-                        try manager.connection.startVPNTunnel()
-                        SharedLogging.log("Initiated VPN tunnel connection.", category: .vpn)
-                        completion(nil)
-                    } catch {
-                        SharedLogging.log("Failed to start VPN tunnel: \(error.localizedDescription)", category: .vpn)
-                        completion(error)
-                    }
+                    let errorDetails = VPNErrorDetails(error: error)
+                    self.lastError = errorDetails
+                    SharedLogging.log("Failed to enable profile during start: \(errorDetails.message)", category: .vpn)
+                    completion(.failure(errorDetails))
+                    return
                 }
+                
+                self.executeStartVPNTunnel(manager: manager, completion: completion)
             }
         } else {
-            do {
-                try manager.connection.startVPNTunnel()
-                SharedLogging.log("Initiated VPN tunnel connection.", category: .vpn)
-                completion(nil)
-            } catch {
-                SharedLogging.log("Failed to start VPN tunnel: \(error.localizedDescription)", category: .vpn)
-                completion(error)
-            }
+            self.executeStartVPNTunnel(manager: manager, completion: completion)
+        }
+    }
+    
+    private func executeStartVPNTunnel(manager: NETunnelProviderManager, completion: @escaping (Result<Void, VPNErrorDetails>) -> Void) {
+        do {
+            try manager.connection.startVPNTunnel()
+            self.lastError = nil
+            SharedLogging.log("startVPNTunnel() invoked successfully.", category: .vpn)
+            completion(.success(()))
+        } catch {
+            let errorDetails = VPNErrorDetails(error: error)
+            self.lastError = errorDetails
+            SharedLogging.log("startVPNTunnel() threw error: [\(errorDetails.domain) Code \(errorDetails.code)] \(errorDetails.message)", category: .vpn)
+            completion(.failure(errorDetails))
         }
     }
     
     public func stopVPN() {
         guard let manager = manager else { return }
         manager.connection.stopVPNTunnel()
-        SharedLogging.log("Initiated VPN tunnel disconnection.", category: .vpn)
+        SharedLogging.log("stopVPNTunnel() requested.", category: .vpn)
     }
     
     private func statusDescription(_ status: NEVPNStatus) -> String {

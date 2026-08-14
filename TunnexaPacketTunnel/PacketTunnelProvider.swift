@@ -9,12 +9,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
     public override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         SharedLogging.log("Starting Packet Tunnel Provider...", category: .vpn)
         
-        guard let sharedDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa") else {
-            let error = NSError(domain: "Tunnexa", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize shared UserDefaults"])
-            SharedLogging.log("Error: \(error.localizedDescription)", category: .vpn)
-            completionHandler(error)
-            return
-        }
+        let sharedDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa") ?? UserDefaults.standard
         
         // 1. Configure Tunnel Network Settings
         // We use 127.0.0.1 as the remote address because the SOCKS5 proxy loopback/local adapter runs locally.
@@ -25,7 +20,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.mtu = NSNumber(value: configuredMtu != 0 ? configuredMtu : 9000)
         
         // IPv4 Settings
-        // Assign a virtual IP address inside the 198.18.0.0/24 subnet (often used for benchmarks/local tunnels)
+        // Assign a virtual IP address inside the 198.18.0.0/24 subnet
         let ipv4Settings = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.255.0"])
         
         // Route all device traffic through this virtual interface
@@ -100,6 +95,8 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
                 try self.localProxy?.start()
             } catch {
                 SharedLogging.log("Failed to start local SOCKS5 proxy: \(error.localizedDescription)", category: .vpn)
+                self.localProxy?.stop()
+                self.localProxy = nil
                 completionHandler(error)
                 return
             }
