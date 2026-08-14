@@ -53,6 +53,8 @@ def create_project():
 		110000010001000100000013 /* YAMLParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000001 /* YAMLParserTests.swift */; };
 		110000010001000100000014 /* RoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000002 /* RoutingTests.swift */; };
 		110000010001000100000015 /* ProxyHealthTester.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000015 /* ProxyHealthTester.swift */; };
+		110000010001000100000017 /* AddProxySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000017 /* AddProxySheet.swift */; };
+		110000010001000100000018 /* ImportConfigSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000018 /* ImportConfigSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,6 +89,8 @@ def create_project():
 		11000002000200020000000B /* ProxiesView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProxiesView.swift; sourceTree = "<group>"; };
 		11000002000200020000000C /* DiagnosticsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		11000002000200020000000D /* SettingsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		110000020002000200000017 /* AddProxySheet.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AddProxySheet.swift; sourceTree = "<group>"; };
+		110000020002000200000018 /* ImportConfigSheet.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ImportConfigSheet.swift; sourceTree = "<group>"; };
 		11000002000200020000000E /* TunnexaApp.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TunnexaApp.swift; sourceTree = "<group>"; };
 		11000002000200020000000F /* Tunnexa.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Tunnexa.entitlements; sourceTree = "<group>"; };
 		110000020002000200000010 /* TunnexaPacketTunnel.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TunnexaPacketTunnel.entitlements; sourceTree = "<group>"; };
@@ -178,6 +182,8 @@ def create_project():
 				11000002000200020000000B /* ProxiesView.swift */,
 				11000002000200020000000C /* DiagnosticsView.swift */,
 				11000002000200020000000D /* SettingsView.swift */,
+				110000020002000200000017 /* AddProxySheet.swift */,
+				110000020002000200000018 /* ImportConfigSheet.swift */,
 			);
 			name = Views;
 			path = Views;
@@ -359,6 +365,8 @@ def create_project():
 				11000001000100010000000D /* ProxiesView.swift in Sources */,
 				11000001000100010000000E /* DiagnosticsView.swift in Sources */,
 				11000001000100010000000F /* SettingsView.swift in Sources */,
+				110000010001000100000017 /* AddProxySheet.swift in Sources */,
+				110000010001000100000018 /* ImportConfigSheet.swift in Sources */,
 				110000010001000100000010 /* TunnexaApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

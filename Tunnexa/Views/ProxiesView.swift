@@ -3,64 +3,141 @@ import SwiftUI
 struct ProxiesView: View {
     @EnvironmentObject var proxyViewModel: ProxyViewModel
     
+    @State private var isAddProxyPresented = false
+    @State private var isImportPresented = false
+    @State private var editingProxy: SOCKS5Proxy? = nil
+    
     var body: some View {
         ZStack {
             Color(hex: "0F172A").ignoresSafeArea()
             
             VStack(spacing: 0) {
-                // Header Bar (if not embedded in NavigationStack, but since we pushed from NavigationView, we can just style navigationTitle or custom bar)
-                HStack {
+                // Top Custom Navigation Bar
+                HStack(spacing: 12) {
                     Text("Proxies & Groups")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
+                    
                     Spacer()
                     
+                    // Import Button
+                    Button(action: {
+                        isImportPresented = true
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Import")
+                        }
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(12)
+                    }
+                    
+                    // Add Proxy Button
+                    Button(action: {
+                        editingProxy = nil
+                        isAddProxyPresented = true
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                            Text("Add")
+                        }
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(hex: "10B981"))
+                        .cornerRadius(12)
+                    }
+                    
+                    // Test All Button
                     if proxyViewModel.isTesting {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .padding(.trailing, 8)
+                            .scaleEffect(0.8)
+                            .padding(.leading, 4)
                     } else {
                         Button(action: {
                             proxyViewModel.testAllLatencies()
                         }) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "bolt.fill")
-                                Text("Test All")
-                            }
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color(hex: "6366F1"))
-                            .cornerRadius(14)
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color(hex: "6366F1"))
+                                .clipShape(Circle())
                         }
                         .disabled(proxyViewModel.proxies.isEmpty)
                     }
                 }
-                .padding()
+                .padding(.horizontal)
+                .padding(.vertical, 12)
                 .background(Color(hex: "1E293B").opacity(0.5))
                 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 24) {
                         
                         if proxyViewModel.proxies.isEmpty {
-                            VStack(spacing: 16) {
-                                Image(systemName: "tray")
-                                    .font(.system(size: 48))
+                            VStack(spacing: 20) {
+                                Image(systemName: "tray.and.arrow.down")
+                                    .font(.system(size: 52))
                                     .foregroundColor(Color(hex: "475569"))
-                                Text("No configuration loaded.\nPlease import a Clash YAML file.")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                    .foregroundColor(Color(hex: "64748B"))
+                                
+                                Text("No Proxies Configured")
+                                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                                
+                                Text("Add a SOCKS5 proxy manually or paste/import a Clash YAML configuration.")
+                                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                                    .foregroundColor(Color(hex: "94A3B8"))
                                     .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 32)
+                                
+                                HStack(spacing: 14) {
+                                    Button(action: {
+                                        editingProxy = nil
+                                        isAddProxyPresented = true
+                                    }) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "plus.circle.fill")
+                                            Text("Add SOCKS5 Proxy")
+                                        }
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 12)
+                                        .background(Color(hex: "10B981"))
+                                        .cornerRadius(12)
+                                    }
+                                    
+                                    Button(action: {
+                                        isImportPresented = true
+                                    }) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "doc.text")
+                                            Text("Import YAML")
+                                        }
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 12)
+                                        .background(Color(hex: "6366F1"))
+                                        .cornerRadius(12)
+                                    }
+                                }
+                                .padding(.top, 8)
                             }
-                            .padding(.vertical, 80)
+                            .padding(.vertical, 60)
                         } else {
                             
                             // 1. Groups Section
                             if !proxyViewModel.groups.isEmpty {
                                 VStack(alignment: .leading, spacing: 12) {
                                     Text("PROXY GROUPS")
-                                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
                                         .foregroundColor(Color(hex: "64748B"))
                                         .tracking(1.0)
                                         .padding(.horizontal)
@@ -74,15 +151,29 @@ struct ProxiesView: View {
                             
                             // 2. Individual Proxies Section
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("INDIVIDUAL SOCKS5 PROXIES")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                                    .foregroundColor(Color(hex: "64748B"))
-                                    .tracking(1.0)
-                                    .padding(.horizontal)
+                                HStack {
+                                    Text("INDIVIDUAL SOCKS5 PROXIES (\(proxyViewModel.proxies.count))")
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .foregroundColor(Color(hex: "64748B"))
+                                        .tracking(1.0)
+                                    Spacer()
+                                }
+                                .padding(.horizontal)
                                 
                                 ForEach(proxyViewModel.proxies) { proxy in
-                                    ProxyRow(proxy: proxy)
-                                        .environmentObject(proxyViewModel)
+                                    ProxyRow(
+                                        proxy: proxy,
+                                        onEdit: {
+                                            editingProxy = proxy
+                                            isAddProxyPresented = true
+                                        },
+                                        onDelete: {
+                                            withAnimation {
+                                                proxyViewModel.deleteProxy(id: proxy.id)
+                                            }
+                                        }
+                                    )
+                                    .environmentObject(proxyViewModel)
                                 }
                             }
                         }
@@ -92,6 +183,14 @@ struct ProxiesView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isAddProxyPresented) {
+            AddProxySheet(editingProxy: editingProxy)
+                .environmentObject(proxyViewModel)
+        }
+        .sheet(isPresented: $isImportPresented) {
+            ImportConfigSheet()
+                .environmentObject(proxyViewModel)
+        }
     }
 }
 
@@ -107,7 +206,7 @@ struct GroupCard: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(group.name)
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
                     Text(group.type == .select ? "Manual Selection Group" : "Load-Balance Round-Robin Group")
                         .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -138,7 +237,6 @@ struct GroupCard: View {
                     Spacer()
                     
                     Menu {
-                        // Options can be proxies or other groups
                         ForEach(group.proxies, id: \.self) { option in
                             Button(action: {
                                 proxyViewModel.selectGroupOption(groupName: group.name, optionName: option)
@@ -154,16 +252,16 @@ struct GroupCard: View {
                     } label: {
                         HStack(spacing: 6) {
                             Text(proxyViewModel.groupSelections[group.name] ?? "None")
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
                                 .foregroundColor(Color(hex: "6366F1"))
                             Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 12))
+                                .font(.system(size: 11))
                                 .foregroundColor(Color(hex: "6366F1"))
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(Color(hex: "6366F1").opacity(0.1))
-                        .cornerRadius(12)
+                        .cornerRadius(10)
                     }
                 }
             }
@@ -183,26 +281,61 @@ struct GroupCard: View {
 
 struct ProxyRow: View {
     let proxy: SOCKS5Proxy
+    var onEdit: (() -> Void)?
+    var onDelete: (() -> Void)?
+    
     @EnvironmentObject var proxyViewModel: ProxyViewModel
     
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             
             // Radio button check
-            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(isSelected ? Color(hex: "10B981") : Color(hex: "475569"))
+            Button(action: {
+                proxyViewModel.selectProxy(proxy.name)
+            }) {
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(isSelected ? Color(hex: "10B981") : Color(hex: "475569"))
+            }
             
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(proxy.name)
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundColor(.white)
-                Text("\(proxy.host):\(proxy.port)")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                Text("\(proxy.host):\(proxy.port)\(proxy.username != nil ? " (Auth)" : "")")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundColor(Color(hex: "64748B"))
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                proxyViewModel.selectProxy(proxy.name)
             }
             
             Spacer()
+            
+            // Edit Button
+            if let onEdit = onEdit {
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(hex: "94A3B8"))
+                        .padding(6)
+                        .background(Color.white.opacity(0.05))
+                        .clipShape(Circle())
+                }
+            }
+            
+            // Delete Button
+            if let onDelete = onDelete {
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(hex: "EF4444").opacity(0.8))
+                        .padding(6)
+                        .background(Color(hex: "EF4444").opacity(0.1))
+                        .clipShape(Circle())
+                }
+            }
             
             // Latency checker state
             Button(action: {
@@ -212,41 +345,35 @@ struct ProxyRow: View {
                     if status == .checking {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: Color(hex: "94A3B8")))
-                            .scaleEffect(0.7)
+                            .scaleEffect(0.6)
                     } else {
-                        // Latency value
                         Text(latencyText)
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundColor(latencyColor)
                         
-                        // Status dot
                         Circle()
                             .fill(latencyColor)
-                            .frame(width: 8, height: 8)
+                            .frame(width: 6, height: 6)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
                 .background(Color.white.opacity(0.03))
-                .cornerRadius(10)
+                .cornerRadius(8)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.white.opacity(0.05), lineWidth: 1)
                 )
             }
         }
-        .padding()
+        .padding(12)
         .background(Color.white.opacity(0.02))
-        .cornerRadius(14)
+        .cornerRadius(12)
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(isSelected ? Color(hex: "10B981").opacity(0.3) : Color.clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? Color(hex: "10B981").opacity(0.4) : Color.clear, lineWidth: 1)
         )
         .padding(.horizontal)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            proxyViewModel.selectProxy(proxy.name)
-        }
     }
     
     // MARK: - Helpers
@@ -266,7 +393,7 @@ struct ProxyRow: View {
         }
         switch status {
         case .unknown: return "Check"
-        case .authFailed: return "Auth Error"
+        case .authFailed: return "Auth Err"
         case .connFailed: return "Dead"
         case .timeout: return "Timeout"
         default: return "Offline"
@@ -276,13 +403,13 @@ struct ProxyRow: View {
     private var latencyColor: Color {
         switch status {
         case .online:
-            return Color(hex: "10B981") // Green
+            return Color(hex: "10B981")
         case .slow:
-            return Color(hex: "F59E0B") // Amber
+            return Color(hex: "F59E0B")
         case .authFailed, .connFailed, .timeout:
-            return Color(hex: "EF4444") // Red
+            return Color(hex: "EF4444")
         default:
-            return Color(hex: "64748B") // Gray
+            return Color(hex: "64748B")
         }
     }
 }

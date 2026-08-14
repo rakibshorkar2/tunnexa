@@ -6,7 +6,7 @@ struct DiagnosticsView: View {
     @State private var isCopied = false
     
     private let timer = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
-    private let sharedDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa")!
+    private let sharedDefaults: UserDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa") ?? .standard
     
     var body: some View {
         ZStack {

@@ -15,7 +15,7 @@ public class VPNViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var timer: Timer?
     private var connectionStartTime: Date?
-    private let sharedDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa")!
+    private let sharedDefaults: UserDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa") ?? .standard
     
     public init() {
         vpnManager.$status

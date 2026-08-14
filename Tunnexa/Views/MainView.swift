@@ -194,29 +194,9 @@ struct MainView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .fileImporter(
-                isPresented: $isImporting,
-                allowedContentTypes: [.item],
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    if let firstUrl = urls.first {
-                        proxyViewModel.importYAML(from: firstUrl)
-                        showImportAlert = true
-                    }
-                case .failure(let error):
-                    SharedLogging.log("File Picker failure: \(error.localizedDescription)", category: .yaml)
-                }
-            }
-            .alert(isPresented: $showImportAlert) {
-                Alert(
-                    title: Text("YAML Configuration"),
-                    message: Text(proxyViewModel.importStatusMessage ?? "No status message"),
-                    dismissButton: .default(Text("OK")) {
-                        proxyViewModel.importStatusMessage = nil
-                    }
-                )
+            .sheet(isPresented: $isImporting) {
+                ImportConfigSheet()
+                    .environmentObject(proxyViewModel)
             }
         }
     }

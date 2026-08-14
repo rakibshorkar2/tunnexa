@@ -9,8 +9,9 @@ struct SettingsView: View {
     @State private var ipv6Enabled = false
     @State private var killSwitch = false
     @State private var mtuSize: String = "9000"
+    @State private var logHistory: [String] = []
     
-    private let sharedDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa")!
+    private let sharedDefaults: UserDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa") ?? .standard
     
     var body: some View {
         ZStack {
