@@ -2,6 +2,29 @@ import Foundation
 import NetworkExtension
 import Tun2SocksKit
 
+// The utun kernel-control constants live in <sys/kern_control.h> and
+// <net/if_utun.h>, which the Swift Darwin module does not expose on iOS.
+// Values below mirror the Darwin headers verbatim.
+private let SYSPROTO_CONTROL: Int32 = 2
+private let AF_SYS_CONTROL: UInt16 = 2
+private let CTL_MAX_NAME_LEN = 96
+private let CTLIOCGINFO: UInt = 0xc0644a03
+private let UTUN_OPT_IFNAME: Int32 = 2
+
+private struct ctl_info {
+    var ctl_id: UInt32 = 0
+    var ctl_name = [Int8](repeating: 0, count: CTL_MAX_NAME_LEN)
+}
+
+private struct sockaddr_ctl {
+    var sc_len: UInt8 = 0
+    var sc_family: UInt8 = 0
+    var ss_sysaddr: UInt16 = 0
+    var sc_id: UInt32 = 0
+    var sc_unit: UInt32 = 0
+    var sc_reserved = [UInt32](repeating: 0, count: 5)
+}
+
 public class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var localProxy: LocalProxyServer?
@@ -234,7 +257,7 @@ enum TunnelFileDescriptor {
 
         var controlAddress = sockaddr_ctl()
         controlAddress.sc_len = UInt8(MemoryLayout<sockaddr_ctl>.size)
-        controlAddress.sc_family = AF_SYSTEM
+        controlAddress.sc_family = UInt8(AF_SYSTEM)
         controlAddress.ss_sysaddr = AF_SYS_CONTROL
         controlAddress.sc_id = controlInfo.ctl_id
         controlAddress.sc_unit = UInt32(utunIndex)
