@@ -152,8 +152,8 @@ def create_project():
 				1100000200020002003F /* Persistence */,
 				1100000200020002004F /* YAML */,
 				1100000200020002005F /* VPN */,
-				1100000200020002000F /* Tunnexa.entitlements */,
-				11000002000200020011 /* Info.plist */,
+				11000002000200020000000F /* Tunnexa.entitlements */,
+				110000020002000200000011 /* App Info.plist */,
 			);
 			name = Tunnexa;
 			path = Tunnexa;
@@ -375,7 +375,6 @@ def create_project():
 				110000010001000100000004 /* SharedLogging.swift in Sources (Extension) */,
 				110000010001000100000007 /* LocalProxyServer.swift in Sources */,
 				110000010001000100000008 /* PacketTunnelProvider.swift in Sources */,
-				110000010001000100000006 /* KeychainHelper.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
