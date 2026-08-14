@@ -1,0 +1,15 @@
+# Build and temporary files
+build/
+DerivedData/
+.DS_Store
+
+# Xcode user settings
+*.xcuserdatad
+*.xcuserdata
+*.xcuserstate
+project.xcworkspace/
+!project.xcworkspace/contents.xcworkspacedata
+
+# Temporary YAML files in App Group path or local
+*.yml.tmp
+*.yaml.tmp

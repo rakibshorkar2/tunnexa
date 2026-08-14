@@ -1,0 +1,89 @@
+name: Tunnexa Build CI
+
+on:
+  push:
+    branches:
+      - "**"
+
+jobs:
+  build:
+    name: Build & Package Tunnexa
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Print CI Environment Details
+        run: |
+          echo "=== CI Environment Details ==="
+          xcodebuild -version
+          swift --version
+          xcrun --sdk iphoneos --show-sdk-path
+          echo "Build number: ${{ github.run_number }}"
+          echo "Git commit: ${{ github.sha }}"
+
+      - name: Select Xcode 15+
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Update Bundle Version (CFBundleVersion)
+        run: |
+          echo "Setting CFBundleVersion to ${{ github.run_number }}..."
+          # Update version plist keys dynamically
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" Tunnexa/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" TunnexaPacketTunnel/Info.plist
+
+      - name: Resolve Swift Package Dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies -project Tunnexa.xcodeproj -scheme Tunnexa
+
+      - name: Clean & Build Archive (Unsigned)
+        run: |
+          xcodebuild archive \
+            -project Tunnexa.xcodeproj \
+            -scheme Tunnexa \
+            -configuration Release \
+            -archivePath build/Tunnexa.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER=""
+
+      - name: Package Unsigned IPA & ZIP
+        run: |
+          echo "Creating Unsigned IPA payload..."
+          mkdir -p build/Payload
+          cp -R build/Tunnexa.xcarchive/Products/Applications/Tunnexa.app build/Payload/
+          cd build
+          zip -r Tunnexa-unsigned-build-${{ github.run_number }}.ipa Payload
+          zip -r Tunnexa-build-${{ github.run_number }}.zip Payload
+          
+          # Create build metadata
+          echo "Build Number: ${{ github.run_number }}" > build-info.txt
+          echo "Git Commit: ${{ github.sha }}" >> build-info.txt
+          echo "Xcode Version: 15.4" >> build-info.txt
+          echo "Date: $(date)" >> build-info.txt
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Tunnexa Build ${{ github.run_number }}
+          body: |
+            Tunnexa automated compilation and package release for build run #${{ github.run_number }}.
+            
+            **Commit**: `${{ github.sha }}`
+            **Xcode**: `15.4`
+            **SDK**: `iOS 17+ / iOS 18`
+            
+            This is an unsigned development release. Sideload using TrollStore, AltStore, Sideloadly or developer signed certs.
+          draft: false
+          prerelease: false
+          files: |
+            build/Tunnexa-unsigned-build-${{ github.run_number }}.ipa
+            build/Tunnexa-build-${{ github.run_number }}.zip
+            build/build-info.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
