@@ -36,7 +36,8 @@ def create_project():
 		110000010001000100000003 /* SharedLogging.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000002 /* SharedLogging.swift */; };
 		110000010001000100000004 /* SharedLogging.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000002 /* SharedLogging.swift */; };
 		110000010001000100000005 /* YAMLParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000003 /* YAMLParser.swift */; };
-		110000010001000100000006 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000004 /* KeychainHelper.swift */; };
+		110000010001000100000006 /* KeychainHelper.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000004 /* KeychainHelper.swift */; };
+		110000010001000100000016 /* KeychainHelper.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000004 /* KeychainHelper.swift */; };
 		110000010001000100000007 /* LocalProxyServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000005 /* LocalProxyServer.swift */; };
 		110000010001000100000008 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000006 /* PacketTunnelProvider.swift */; };
 		110000010001000100000009 /* VPNManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000007 /* VPNManager.swift */; };
@@ -140,6 +141,7 @@ def create_project():
 			children = (
 				110000020002000200000001 /* SharedModels.swift */,
 				110000020002000200000002 /* SharedLogging.swift */,
+				110000020002000200000004 /* KeychainHelper.swift */,
 			);
 			name = Shared;
 			path = Shared;
@@ -151,7 +153,6 @@ def create_project():
 				11000002000200020000001F /* App */,
 				11000002000200020000002F /* Views */,
 				11000002000200020000003F /* ViewModels */,
-				11000002000200020000004F /* Persistence */,
 				11000002000200020000005F /* YAML */,
 				11000002000200020000006F /* VPN */,
 				11000002000200020000000F /* Tunnexa.entitlements */,
@@ -190,15 +191,6 @@ def create_project():
 			);
 			name = ViewModels;
 			path = ViewModels;
-			sourceTree = "<group>";
-		};
-		11000002000200020000004F /* Persistence */ = {
-			isa = PBXGroup;
-			children = (
-				110000020002000200000004 /* KeychainHelper.swift */,
-			);
-			name = Persistence;
-			path = Persistence;
 			sourceTree = "<group>";
 		};
 		11000002000200020000005F /* YAML */ = {
@@ -357,8 +349,8 @@ def create_project():
 			files = (
 				110000010001000100000001 /* SharedModels.swift in Sources (App) */,
 				110000010001000100000003 /* SharedLogging.swift in Sources (App) */,
+				110000010001000100000006 /* KeychainHelper.swift in Sources (App) */,
 				110000010001000100000005 /* YAMLParser.swift in Sources */,
-				110000010001000100000006 /* KeychainHelper.swift in Sources */,
 				110000010001000100000009 /* VPNManager.swift in Sources */,
 				110000010001000100000015 /* ProxyHealthTester.swift in Sources */,
 				11000001000100010000000A /* ProxyViewModel.swift in Sources */,
@@ -377,6 +369,7 @@ def create_project():
 			files = (
 				110000010001000100000002 /* SharedModels.swift in Sources (Extension) */,
 				110000010001000100000004 /* SharedLogging.swift in Sources (Extension) */,
+				110000010001000100000016 /* KeychainHelper.swift in Sources (Extension) */,
 				110000010001000100000007 /* LocalProxyServer.swift in Sources */,
 				110000010001000100000008 /* PacketTunnelProvider.swift in Sources */,
 			);
