@@ -166,6 +166,9 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
     public override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLogging.log("Stopping Packet Tunnel Provider... Reason: \(reason.rawValue)", category: .vpn)
         
+        // Stop the blocking C engine first — this unblocks the tunnel thread
+        Socks5Tunnel.stop()
+        
         localProxy?.stop()
         localProxy = nil
         tunnelThread = nil

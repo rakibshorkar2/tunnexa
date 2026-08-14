@@ -35,7 +35,10 @@ public class LocalProxyServer {
         let parameters = NWParameters.tcp
         parameters.requiredInterfaceType = .loopback
         
-        let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            throw NSError(domain: "Tunnexa", code: 10, userInfo: [NSLocalizedDescriptionKey: "Invalid listener port: \(port)"])
+        }
+        let listener = try NWListener(using: parameters, on: nwPort)
         self.listener = listener
         
         listener.stateUpdateHandler = { state in
@@ -267,9 +270,9 @@ public class LocalProxyServer {
                 var chosenOption = ""
                 stateQueue.sync {
                     let currentIndex = loadBalanceIndices[group.name] ?? 0
-                    let nextIndex = (currentIndex + 1) % list.count
-                    loadBalanceIndices[group.name] = nextIndex
+                    // Use currentIndex to select, THEN advance to next
                     chosenOption = list[currentIndex]
+                    loadBalanceIndices[group.name] = (currentIndex + 1) % list.count
                 }
                 
                 if chosenOption == "DIRECT" {
@@ -496,21 +499,23 @@ public class LocalProxyServer {
     }
     
     private func bridgeConnections(_ conn1: NWConnection, _ conn2: NWConnection) {
-        pipe(from: conn1, to: conn2)
-        pipe(from: conn2, to: conn1)
+        // conn1 -> conn2 is the upload direction (client -> remote)
+        pipe(from: conn1, to: conn2, isUpload: true)
+        // conn2 -> conn1 is the download direction (remote -> client)
+        pipe(from: conn2, to: conn1, isUpload: false)
     }
     
-    private func pipe(from: NWConnection, to: NWConnection) {
+    private func pipe(from: NWConnection, to: NWConnection, isUpload: Bool) {
         from.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, context, isComplete, error in
             if let data = data, !data.isEmpty {
-                self?.recordTransfer(bytes: data.count, isUpload: (from === self?.activeConnections.first))
+                self?.recordTransfer(bytes: data.count, isUpload: isUpload)
                 
                 to.send(content: data, completion: .contentProcessed({ [weak self] sendError in
                     if sendError == nil {
                         if isComplete {
                             to.send(content: nil, contentContext: .defaultStream, isComplete: true, completion: .idempotent)
                         } else {
-                            self?.pipe(from: from, to: to)
+                            self?.pipe(from: from, to: to, isUpload: isUpload)
                         }
                     } else {
                         from.cancel()
@@ -533,31 +538,28 @@ public class LocalProxyServer {
     private var pendingUploadBytes = 0
     private var pendingDownloadBytes = 0
     
+    // All byte accounting is serialized through stateQueue to prevent races
     private func recordTransfer(bytes: Int, isUpload: Bool) {
-        if isUpload {
-            pendingUploadBytes += bytes
-        } else {
-            pendingDownloadBytes += bytes
-        }
-        
-        let now = Date()
-        if now.timeIntervalSince(lastStatsUpdate) >= 1.0 {
-            let up = pendingUploadBytes
-            let down = pendingDownloadBytes
-            pendingUploadBytes = 0
-            pendingDownloadBytes = 0
-            lastStatsUpdate = now
+        stateQueue.async { [weak self] in
+            guard let self = self else { return }
+            if isUpload {
+                self.pendingUploadBytes += bytes
+            } else {
+                self.pendingDownloadBytes += bytes
+            }
             
-            queue.async {
-                let keyUp = "stat_upload_bytes"
-                let keyDown = "stat_download_bytes"
+            let now = Date()
+            if now.timeIntervalSince(self.lastStatsUpdate) >= 1.0 {
+                let up = self.pendingUploadBytes
+                let down = self.pendingDownloadBytes
+                self.pendingUploadBytes = 0
+                self.pendingDownloadBytes = 0
+                self.lastStatsUpdate = now
                 
-                let currentUp = self.sharedDefaults.integer(forKey: keyUp)
-                let currentDown = self.sharedDefaults.integer(forKey: keyDown)
-                
-                self.sharedDefaults.set(currentUp + up, forKey: keyUp)
-                self.sharedDefaults.set(currentDown + down, forKey: keyDown)
-                
+                let currentUp = self.sharedDefaults.integer(forKey: "stat_upload_bytes")
+                let currentDown = self.sharedDefaults.integer(forKey: "stat_download_bytes")
+                self.sharedDefaults.set(currentUp + up, forKey: "stat_upload_bytes")
+                self.sharedDefaults.set(currentDown + down, forKey: "stat_download_bytes")
                 self.sharedDefaults.set(up, forKey: "stat_upload_speed")
                 self.sharedDefaults.set(down, forKey: "stat_download_speed")
             }

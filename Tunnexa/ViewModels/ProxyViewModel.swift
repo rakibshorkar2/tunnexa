@@ -188,8 +188,8 @@ public class ProxyViewModel: ObservableObject {
             }
         }
         
-        group.notify(queue: .main) {
-            self.isTesting = false
+        group.notify(queue: .main) { [weak self] in
+            self?.isTesting = false
             SharedLogging.log("Completed latency checks for all imported proxies.", category: .proxy)
         }
     }

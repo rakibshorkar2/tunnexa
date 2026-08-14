@@ -93,13 +93,18 @@ public class VPNManager: ObservableObject {
                 if let error = error {
                     SharedLogging.log("Failed to enable VPN manager profile: \(error.localizedDescription)", category: .vpn)
                 } else {
-                    try? manager.connection.startVPNTunnel()
+                    do {
+                        try manager.connection.startVPNTunnel()
+                        SharedLogging.log("Initiated VPN tunnel connection.", category: .vpn)
+                    } catch {
+                        SharedLogging.log("Failed to start VPN tunnel after enabling profile: \(error.localizedDescription)", category: .vpn)
+                    }
                 }
             }
         } else {
             try manager.connection.startVPNTunnel()
+            SharedLogging.log("Initiated VPN tunnel connection.", category: .vpn)
         }
-        SharedLogging.log("Initiated VPN tunnel connection.", category: .vpn)
     }
     
     public func stopVPN() {

@@ -1,5 +1,6 @@
 import XCTest
 @testable import Tunnexa
+@testable import TunnexaPacketTunnel
 
 final class RoutingTests: XCTestCase {
     

@@ -126,6 +126,12 @@ public class YAMLParser {
             } else {
                 if trimmed.contains(":") {
                     let parts = trimmed.split(separator: ":", maxSplits: 1)
+                    guard parts.count >= 2 else {
+                        // Line like "key:" with no value — treat as a new list key
+                        currentListKey = String(parts[0]).trimmingCharacters(in: .whitespaces)
+                        currentListItems = []
+                        continue
+                    }
                     let key = parts[0].trimmingCharacters(in: .whitespaces)
                     var val = parts[1].trimmingCharacters(in: .whitespaces)
                     
