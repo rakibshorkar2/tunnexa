@@ -1031,6 +1031,125 @@ def validate_project(pbxproj_path):
     return True
 
 
+def build_scheme():
+    """Shared scheme with the test action wired to TunnexaTests.
+
+    Without this, Xcode auto-generates a scheme that has no TestAction and
+    `xcodebuild test` fails with 'Scheme Tunnexa is not currently configured
+    for the test action'.
+    """
+    app_ref = (
+        f'<BuildableReference\n'
+        f'               BuildableIdentifier = "primary"\n'
+        f'               BlueprintIdentifier = "{APP_TARGET_ID}"\n'
+        f'               BuildableName = "Tunnexa.app"\n'
+        f'               BlueprintName = "Tunnexa"\n'
+        f'               ReferencedContainer = "container:Tunnexa.xcodeproj">\n'
+        f'            </BuildableReference>'
+    )
+    ext_ref = (
+        f'<BuildableReference\n'
+        f'               BuildableIdentifier = "primary"\n'
+        f'               BlueprintIdentifier = "{EXT_TARGET_ID}"\n'
+        f'               BuildableName = "TunnexaPacketTunnel.appex"\n'
+        f'               BlueprintName = "TunnexaPacketTunnel"\n'
+        f'               ReferencedContainer = "container:Tunnexa.xcodeproj">\n'
+        f'            </BuildableReference>'
+    )
+    test_ref = (
+        f'<BuildableReference\n'
+        f'               BuildableIdentifier = "primary"\n'
+        f'               BlueprintIdentifier = "{TEST_TARGET_ID}"\n'
+        f'               BuildableName = "TunnexaTests.xctest"\n'
+        f'               BlueprintName = "TunnexaTests"\n'
+        f'               ReferencedContainer = "container:Tunnexa.xcodeproj">\n'
+        f'            </BuildableReference>'
+    )
+
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Scheme
+   LastUpgradeVersion = "1500"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            {app_ref}
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            {ext_ref}
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            {test_ref}
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            {test_ref}
+         </TestableReference>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         {app_ref}
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration = "Release"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      savedToolIdentifier = ""
+      useCustomWorkingDirectory = "NO"
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         {app_ref}
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction
+      buildConfiguration = "Debug">
+   </AnalyzeAction>
+   <ArchiveAction
+      buildConfiguration = "Release"
+      revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>
+"""
+
+
 def create_project():
     print("Generating Tunnexa Xcode Project structure...")
 
@@ -1053,6 +1172,11 @@ def create_project():
     pbxproj_content = build_pbxproj()
     with open(pbxproj_path, "w", encoding="utf-8") as f:
         f.write(pbxproj_content)
+
+    scheme_dir = os.path.join(xcodeproj_dir, "xcshareddata", "xcschemes")
+    os.makedirs(scheme_dir, exist_ok=True)
+    with open(os.path.join(scheme_dir, "Tunnexa.xcscheme"), "w", encoding="utf-8") as f:
+        f.write(build_scheme())
 
     print("Created Tunnexa.xcodeproj structures successfully.")
 
