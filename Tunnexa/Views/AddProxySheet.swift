@@ -213,7 +213,7 @@ struct AddProxySheet: View {
                     self.host = proxy.host
                     self.portText = "\(proxy.port)"
                     self.username = proxy.username ?? ""
-                    self.password = KeychainHelper.shared.getPassword(forProxyId: proxy.id.uuidString) ?? ""
+                    self.password = KeychainHelper.shared.loadPassword(forProxyId: proxy.id.uuidString) ?? ""
                 }
             }
         }
@@ -244,12 +244,12 @@ struct AddProxySheet: View {
             password: password.isEmpty ? nil : password
         )
         
-        ProxyHealthTester.testLatency(proxy: testProxy) { latency, status in
+        ProxyHealthTester.testLatency(proxy: testProxy, password: password.isEmpty ? nil : password) { result in
             DispatchQueue.main.async {
                 self.isTesting = false
-                self.testLatencyMs = latency
-                self.testResult = status
-                self.testSuccess = (status == "Online")
+                self.testLatencyMs = result.totalLatencyMs
+                self.testResult = result.status.rawValue
+                self.testSuccess = (result.status == .online)
             }
         }
     }

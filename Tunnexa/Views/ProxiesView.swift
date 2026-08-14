@@ -55,10 +55,22 @@ struct ProxiesView: View {
                     
                     // Test All Button
                     if proxyViewModel.isTesting {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(0.8)
-                            .padding(.leading, 4)
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                            Text("\(proxyViewModel.testedCount)/\(proxyViewModel.proxies.count)")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundColor(.white)
+                            Button(action: {
+                                proxyViewModel.cancelLatencyTests()
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(Color(hex: "F43F5E"))
+                            }
+                        }
+                        .padding(.leading, 4)
                     } else {
                         Button(action: {
                             proxyViewModel.testAllLatencies()
@@ -79,7 +91,39 @@ struct ProxiesView: View {
                 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 24) {
-                        
+                        if !proxyViewModel.proxies.isEmpty {
+                            // Search & sort
+                            HStack(spacing: 10) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "magnifyingglass")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(Color(hex: "64748B"))
+                                    TextField("Search proxies", text: $proxyViewModel.searchText)
+                                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                                        .foregroundColor(.white)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(Color.white.opacity(0.05))
+                                .cornerRadius(10)
+
+                                Menu {
+                                    Picker("Sort", selection: $proxyViewModel.sortOrder) {
+                                        Text("Name").tag(ProxySortOrder.name)
+                                        Text("Latency").tag(ProxySortOrder.latency)
+                                    }
+                                } label: {
+                                    Image(systemName: "arrow.up.arrow.down")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(.white)
+                                        .padding(10)
+                                        .background(Color.white.opacity(0.05))
+                                        .cornerRadius(10)
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+
                         if proxyViewModel.proxies.isEmpty {
                             VStack(spacing: 20) {
                                 Image(systemName: "tray.and.arrow.down")
@@ -160,7 +204,7 @@ struct ProxiesView: View {
                                 }
                                 .padding(.horizontal)
                                 
-                                ForEach(proxyViewModel.proxies) { proxy in
+                                ForEach(proxyViewModel.filteredProxies) { proxy in
                                     ProxyRow(
                                         proxy: proxy,
                                         onEdit: {

@@ -50,12 +50,12 @@ struct MainView: View {
                         
                         // Status Card (Connected / Disconnected)
                         VStack(spacing: 6) {
-                            Text(vpnViewModel.status == .connected ? "CONNECTED" : (vpnViewModel.status == .connecting ? "CONNECTING..." : "DISCONNECTED"))
+                            Text(vpnViewModel.state == .connected ? "CONNECTED" : (vpnViewModel.state.isActive ? statusLabel.uppercased() : "DISCONNECTED"))
                                 .font(.system(size: 13, weight: .bold, design: .rounded))
                                 .tracking(2.0)
                                 .foregroundColor(statusColor)
-                            
-                            if vpnViewModel.status == .connected {
+
+                            if vpnViewModel.state.isConnected {
                                 Text(vpnViewModel.sessionDuration)
                                     .font(.system(size: 16, weight: .semibold, design: .monospaced))
                                     .foregroundColor(.white.opacity(0.8))
@@ -73,9 +73,9 @@ struct MainView: View {
                                 Circle()
                                     .stroke(statusColor.opacity(0.3), lineWidth: 10)
                                     .frame(width: 190, height: 190)
-                                    .scaleEffect(vpnViewModel.status == .connected ? 1.05 : 1.0)
-                                    .blur(radius: vpnViewModel.status == .connected ? 4 : 0)
-                                    .animation(vpnViewModel.status == .connected ? .easeInOut(duration: 1.5).repeatForever(autoreverses: true) : .default, value: vpnViewModel.status)
+                                    .scaleEffect(vpnViewModel.state.isConnected ? 1.05 : 1.0)
+                                    .blur(radius: vpnViewModel.state.isConnected ? 4 : 0)
+                                    .animation(vpnViewModel.state.isConnected ? .easeInOut(duration: 1.5).repeatForever(autoreverses: true) : .default, value: vpnViewModel.state.isConnected)
                                 
                                 // Inner Ring
                                 Circle()
@@ -90,20 +90,26 @@ struct MainView: View {
                                         endPoint: .bottomTrailing
                                     ))
                                     .frame(width: 150, height: 150)
-                                    .shadow(color: statusColor.opacity(0.4), radius: vpnViewModel.status == .connected ? 20 : 5)
+                                    .shadow(color: statusColor.opacity(0.4), radius: vpnViewModel.state.isConnected ? 20 : 5)
                                 
                                 // Icon / Label
                                 VStack(spacing: 8) {
                                     Image(systemName: "power")
                                         .font(.system(size: 44, weight: .bold))
                                         .foregroundColor(statusColor)
-                                    Text(vpnViewModel.status == .connected ? "DISCONNECT" : "CONNECT")
-                                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                                        .foregroundColor(.white.opacity(0.9))
+                                    if vpnViewModel.isBusy {
+                                        ProgressView()
+                                            .tint(.white)
+                                            .padding(.top, 2)
+                                    } else {
+                                        Text(vpnViewModel.state.isConnected ? "DISCONNECT" : "CONNECT")
+                                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                                            .foregroundColor(.white.opacity(0.9))
+                                    }
                                 }
                             }
                         }
-                        .disabled(vpnViewModel.status == .connecting || vpnViewModel.status == .disconnecting)
+                        .disabled(vpnViewModel.state.isActive)
                         .padding(.vertical, 16)
                         
                         // Latency & Speeds Grid
@@ -215,13 +221,29 @@ struct MainView: View {
     // MARK: - Computed Properties
     
     private var statusColor: Color {
-        switch vpnViewModel.status {
+        switch vpnViewModel.state {
         case .connected:
             return Color(hex: "10B981") // Green
-        case .connecting:
+        case .connecting, .preparing:
             return Color(hex: "F59E0B") // Amber
+        case .reasserting:
+            return Color(hex: "F59E0B") // Amber
+        case .failed, .invalid:
+            return Color(hex: "F43F5E") // Red
         default:
             return Color(hex: "64748B") // Slate/Gray
+        }
+    }
+
+    private var statusLabel: String {
+        switch vpnViewModel.state {
+        case .preparing: return "Preparing..."
+        case .connecting: return "Connecting..."
+        case .reasserting: return "Reconnecting..."
+        case .disconnecting: return "Disconnecting..."
+        case .failed: return "Failed"
+        case .invalid: return "Invalid Profile"
+        default: return "Disconnected"
         }
     }
     

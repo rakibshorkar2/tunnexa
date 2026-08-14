@@ -124,12 +124,15 @@ python3 validate_ipa.py --ipa Tunnexa-unsigned-build-N.ipa
 
 The script checks:
 - Main app bundle identifier = `com.rakib.tunnexa`
+- Main app executable is present
 - Extension is embedded in `PlugIns/TunnexaPacketTunnel.appex`
 - Extension bundle identifier = `com.rakib.tunnexa.PacketTunnel`
 - `CFBundlePackageType = XPC!`
 - `NSExtensionPointIdentifier = com.apple.networkextension.packet-tunnel`
 - `NSExtensionPrincipalClass` is set to `PacketTunnelProvider`
 - Extension executable is present
+- Signing state detected and reported (signed bundles must carry `_CodeSignature` + `embedded.mobileprovision`)
+- App and extension signing states are consistent
 
 ---
 
@@ -146,10 +149,10 @@ The script checks:
 6. startVPNTunnel() invoked
 7. iOS launches TunnexaPacketTunnel.appex process
 8. PacketTunnelProvider.startTunnel() installs NEPacketTunnelNetworkSettings
-9. Tun2SocksKit background thread started with TUN fd and SOCKS5 proxy config
-10. All device traffic routes through TUN → SOCKS5 proxy
-11. UI displays Connected status
-12. stopVPN() → PacketTunnelProvider.stopTunnel() → LocalProxyServer stopped → tunnel thread exits
+9. Local SOCKS5 dispatcher (port 10808) starts; Tun2SocksKit is launched on a dedicated thread with the TUN fd, pointed at the loopback dispatcher
+10. All device traffic routes through TUN → dispatcher (rules & groups) → SOCKS5 proxy
+11. UI displays Connected status; a sampler reports upload/download statistics every second
+12. stopVPN() → PacketTunnelProvider.stopTunnel() → dispatcher stopped → Tun2SocksKit quit + join (thread exits cleanly)
 ```
 
 ---
@@ -163,6 +166,10 @@ The script checks:
 | DNS queries | Captured by Tun2SocksKit mapdns on 198.18.0.2 |
 | RFC 1918 private ranges (if allow-local=true) | Excluded from tunnel, direct |
 | SOCKS5 server IP itself | Excluded from tunnel (prevents routing loop) |
+
+**Fail-closed routing:** when no rule matches and no proxy/group is selected, the dispatcher answers connections with SOCKS5 REP 0x02 (not allowed) — traffic is blocked, never implicitly leaked direct. When the kill switch is enabled, a `NEOnDemandRuleConnect` rule additionally blocks non-VPN traffic at the system level.
+
+**Automatic reconnection:** on unexpected tunnel failures, the app retries with a backoff ladder (1, 2, 4, 8, 15, 30 s) up to 5 consecutive attempts, resetting the counter after a stable connection or a manual disconnect.
 
 Virtual TUN subnet: `198.18.0.0/24`
 Virtual TUN IPv4 address: `198.18.0.1`

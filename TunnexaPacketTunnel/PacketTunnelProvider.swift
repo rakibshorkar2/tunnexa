@@ -3,171 +3,254 @@ import NetworkExtension
 import Tun2SocksKit
 
 public class PacketTunnelProvider: NEPacketTunnelProvider {
+
     private var localProxy: LocalProxyServer?
-    private var tunnelThread: Thread?
-    
-    public override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+    private var engine: TunnelEngine?
+    private var statsSampler: TunnelStatsSampler?
+
+    public override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         SharedLogging.log("Starting Packet Tunnel Provider...", category: .vpn)
-        
-        let sharedDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa") ?? UserDefaults.standard
-        
-        // 1. Configure Tunnel Network Settings
-        // We use 127.0.0.1 as the remote address because the SOCKS5 proxy loopback/local adapter runs locally.
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        
-        // MTU
-        let configuredMtu = sharedDefaults.integer(forKey: "setting_mtu")
-        settings.mtu = NSNumber(value: configuredMtu != 0 ? configuredMtu : 9000)
-        
-        // IPv4 Settings
-        // Assign a virtual IP address inside the 198.18.0.0/24 subnet
-        let ipv4Settings = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.255.0"])
-        
-        // Route all device traffic through this virtual interface
-        ipv4Settings.includedRoutes = [NEIPv4Route.default()]
-        
-        // Excluded routes to prevent routing loops (the remote proxy IP itself must NOT be routed through the tunnel)
-        var excludedRoutes: [NEIPv4Route] = []
-        
-        if let configData = sharedDefaults.data(forKey: "proxy_config"),
-           let config = try? JSONDecoder().decode(ProxyConfiguration.self, from: configData) {
-            for proxy in config.proxies {
-                if isIPAddress(proxy.host) {
-                    excludedRoutes.append(NEIPv4Route(destinationAddress: proxy.host, subnetMask: "255.255.255.255"))
-                }
-            }
+
+        let settings = SharedSettings()
+        guard let config = settings.loadConfiguration() else {
+            let error = NSError(domain: "Tunnexa.Provider", code: 100,
+                                userInfo: [NSLocalizedDescriptionKey: "No proxy configuration found in shared defaults."])
+            SharedLogging.log("startTunnel aborted: \(error.localizedDescription)", category: .vpn, level: .error)
+            completionHandler(error)
+            return
         }
-        
-        // Handle "Allow Local Network" setting
-        let allowLocal = sharedDefaults.bool(forKey: "setting_allow_local")
+
+        // Fail-closed: refuse to start a tunnel that cannot route anything.
+        guard config.hasUsableSelection else {
+            let error = NSError(domain: "Tunnexa.Provider", code: 101,
+                                userInfo: [NSLocalizedDescriptionKey: "No proxies or groups configured. Import a configuration first."])
+            SharedLogging.log("startTunnel aborted: \(error.localizedDescription)", category: .vpn, level: .error)
+            completionHandler(error)
+            return
+        }
+        if !SharedSettings.hasValidSelection(config: config, selectedProxy: settings.selectedProxyName, selectedGroup: settings.selectedGroupName) {
+            let error = NSError(domain: "Tunnexa.Provider", code: 102,
+                                userInfo: [NSLocalizedDescriptionKey: "The selected proxy is no longer available. Choose a proxy in the app and try again."])
+            SharedLogging.log("startTunnel aborted: \(error.localizedDescription)", category: .vpn, level: .error)
+            completionHandler(error)
+            return
+        }
+
+        // 1. Tunnel network settings.
+        let tunnelSettings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
+
+        // MTU (validated).
+        let mtu = settings.mtuOrDefault
+        tunnelSettings.mtu = NSNumber(value: mtu)
+        SharedLogging.log("Tunnel MTU: \(mtu)", category: .vpn)
+
+        // IPv4: virtual address + default route.
+        let ipv4Settings = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.255.0"])
+        ipv4Settings.includedRoutes = [NEIPv4Route.default()]
+
+        // Excluded routes: proxy IPs (prevent routing loops) + optional local network.
+        var excludedRoutes: [NEIPv4Route] = []
+        for proxy in config.proxies where NetworkAddressMatcher.isIPv4(proxy.host) {
+            excludedRoutes.append(NEIPv4Route(destinationAddress: proxy.host, subnetMask: "255.255.255.255"))
+        }
+        let allowLocal = settings.allowLocalNetwork
         if allowLocal {
-            // Standard RFC 1918 Private IP Ranges
             excludedRoutes.append(NEIPv4Route(destinationAddress: "10.0.0.0", subnetMask: "255.0.0.0"))
             excludedRoutes.append(NEIPv4Route(destinationAddress: "172.16.0.0", subnetMask: "255.240.0.0"))
             excludedRoutes.append(NEIPv4Route(destinationAddress: "192.168.0.0", subnetMask: "255.255.0.0"))
-            SharedLogging.log("Local network routes excluded from the tunnel.", category: .vpn)
-        } else {
-            SharedLogging.log("Local network traffic will be captured by the tunnel.", category: .vpn)
+            SharedLogging.log("Local IPv4 networks excluded from the tunnel.", category: .vpn)
         }
-        
         ipv4Settings.excludedRoutes = excludedRoutes
-        settings.ipv4Settings = ipv4Settings
-        
-        // IPv6 Settings
-        let isIPv6Enabled = sharedDefaults.bool(forKey: "setting_ipv6")
+        tunnelSettings.ipv4Settings = ipv4Settings
+
+        // IPv6 (optional).
+        let isIPv6Enabled = settings.ipv6Enabled
         if isIPv6Enabled {
             let ipv6Settings = NEIPv6Settings(addresses: ["fc00::1"], networkPrefixLengths: [NSNumber(value: 64)])
             ipv6Settings.includedRoutes = [NEIPv6Route.default()]
-            settings.ipv6Settings = ipv6Settings
-            SharedLogging.log("IPv6 tunneling enabled.", category: .vpn)
+            var ipv6Excluded: [NEIPv6Route] = []
+            for proxy in config.proxies where NetworkAddressMatcher.isIPv6(proxy.host) {
+                ipv6Excluded.append(NEIPv6Route(destinationAddress: proxy.host, networkPrefixLength: 128))
+            }
+            if allowLocal {
+                ipv6Excluded.append(NEIPv6Route(destinationAddress: "fd00::", networkPrefixLength: 8))
+                ipv6Excluded.append(NEIPv6Route(destinationAddress: "fe80::", networkPrefixLength: 10))
+                ipv6Excluded.append(NEIPv6Route(destinationAddress: "::1", networkPrefixLength: 128))
+            }
+            ipv6Settings.excludedRoutes = ipv6Excluded
+            tunnelSettings.ipv6Settings = ipv6Settings
+            SharedLogging.log("IPv6 tunneling enabled with \(ipv6Excluded.count) excluded routes.", category: .vpn)
         }
-        
-        // DNS Settings
-        // We direct DNS queries to 198.18.0.2, which is captured by the mapdns engine of hev-socks5-tunnel
+
+        // DNS: redirected to the engine's built-in mapdns handler.
         let dnsSettings = NEDNSSettings(servers: ["198.18.0.2"])
-        dnsSettings.matchDomains = [""] // Match all domains
-        settings.dnsSettings = dnsSettings
-        
-        // Apply settings to the virtual interface
-        setTunnelNetworkSettings(settings) { [weak self] error in
+        dnsSettings.matchDomains = [""]
+        tunnelSettings.dnsSettings = dnsSettings
+
+        setTunnelNetworkSettings(tunnelSettings) { [weak self] error in
             guard let self = self else { return }
-            
             if let error = error {
-                SharedLogging.log("Failed to set tunnel network settings: \(error.localizedDescription)", category: .vpn)
+                SharedLogging.log("Failed to set tunnel network settings: \(error.localizedDescription)", category: .vpn, level: .error)
                 completionHandler(error)
                 return
             }
-            
-            // 2. Extract TUN file descriptor via Key-Value Coding
-            guard let tunFd = self.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32 else {
-                let error = NSError(domain: "Tunnexa", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to extract TUN interface file descriptor"])
-                SharedLogging.log("Error: \(error.localizedDescription)", category: .vpn)
-                completionHandler(error)
-                return
-            }
-            
-            SharedLogging.log("Extracted TUN file descriptor: \(tunFd)", category: .tunnel)
-            
-            // 3. Start our local SOCKS5 Dispatcher on localhost:10808
-            let localPort: UInt16 = 10808
-            self.localProxy = LocalProxyServer(port: localPort, sharedDefaults: sharedDefaults)
-            do {
-                try self.localProxy?.start()
-            } catch {
-                SharedLogging.log("Failed to start local SOCKS5 proxy: \(error.localizedDescription)", category: .vpn)
-                self.localProxy?.stop()
-                self.localProxy = nil
-                completionHandler(error)
-                return
-            }
-            
-            // 4. Generate the YAML configuration content expected by hev-socks5-tunnel core
-            var configYml = """
-            tunnel:
-              name: tun0
-              mtu: \(settings.mtu?.intValue ?? 9000)
-              fd: \(tunFd)
-              ipv4: 198.18.0.1
-            """
-            
-            if isIPv6Enabled {
-                configYml += "\n  ipv6: 'fc00::1'"
-            }
-            
-            configYml += """
-            
-            socks5:
-              address: 127.0.0.1
-              port: \(localPort)
-              udp: udp
-            mapdns:
-              address: 198.18.0.2
-              port: 53
-              network: 100.64.0.0
-              netmask: 255.192.0.0
-              cache-size: 10000
-            misc:
-              task-stack-size: 20480
-              connect-timeout: 5000
-              read-write-timeout: 60000
-              log-file: stderr
-              log-level: warn
-              limit-nofile: 65535
-            """
-            
-            // 5. Spawn background thread to run the blocking Tun2SocksKit engine
-            self.tunnelThread = Thread {
-                SharedLogging.log("Starting Socks5Tunnel background loop...", category: .tunnel)
-                let exitCode = Socks5Tunnel.run(withConfig: .string(content: configYml))
-                SharedLogging.log("Socks5Tunnel exited with code \(exitCode)", category: .tunnel)
-            }
-            self.tunnelThread?.name = "Tunnexa.TunnelThread"
-            self.tunnelThread?.start()
-            
-            SharedLogging.log("Tunnel successfully established.", category: .vpn)
-            completionHandler(nil)
+            self.proceedAfterNetworkSettings(config: config, settings: settings, isIPv6Enabled: isIPv6Enabled, mtu: mtu, completionHandler: completionHandler)
         }
     }
-    
+
+    private func proceedAfterNetworkSettings(config: ProxyConfiguration, settings: SharedSettings, isIPv6Enabled: Bool, mtu: Int, completionHandler: @escaping (Error?) -> Void) {
+        // 2. TUN file descriptor.
+        // Primary: ioctl scan of the utun interfaces (no KVC). Fallback: the
+        // documented-but-private `packetFlow.value(forKeyPath: "socket.fileDescriptor")`.
+        guard let tunFd = TunnelFileDescriptor.tunnelFd() ?? TunnelFileDescriptor.kvcPacketFlowFd(of: packetFlow) else {
+            let error = NSError(domain: "Tunnexa.Provider", code: 2,
+                                userInfo: [NSLocalizedDescriptionKey: "Failed to extract TUN interface file descriptor."])
+            SharedLogging.log("startTunnel aborted: \(error.localizedDescription)", category: .vpn, level: .error)
+            completionHandler(error)
+            return
+        }
+        SharedLogging.log("TUN file descriptor acquired: \(tunFd)", category: .tunnel)
+
+        // 3. Local SOCKS5 dispatcher on 127.0.0.1:10808.
+        let localPort: UInt16 = AppConfigConstants.localProxyPort
+        let dispatcher = LocalProxyServer(port: localPort, settings: settings)
+        dispatcher.hostResolver = { host, completion in
+            ProxyEndpointResolver.shared.resolve(host: host, completion: completion)
+        }
+        do {
+            try dispatcher.start()
+        } catch {
+            SharedLogging.log("Failed to start local SOCKS5 dispatcher: \(error.localizedDescription)", category: .vpn, level: .error)
+            dispatcher.stop()
+            completionHandler(error)
+            return
+        }
+        localProxy = dispatcher
+
+        // 4. Engine configuration.
+        var configYAML = """
+        tunnel:
+          name: tun0
+          mtu: \(mtu)
+          fd: \(tunFd)
+          ipv4: 198.18.0.1
+
+        """
+        if isIPv6Enabled {
+            configYAML += "  ipv6: 'fc00::1'\n"
+        }
+        configYAML += """
+        socks5:
+          address: 127.0.0.1
+          port: \(localPort)
+          udp: udp
+        mapdns:
+          address: 198.18.0.2
+          port: 53
+          network: 100.64.0.0
+          netmask: 255.192.0.0
+          cache-size: 10000
+        misc:
+          task-stack-size: 20480
+          connect-timeout: 5000
+          read-write-timeout: 60000
+          log-file: stderr
+          log-level: warn
+          limit-nofile: 65535
+        """
+
+        // 5. Engine + stats.
+        let engine = TunnelEngine(configYAML: configYAML)
+        engine.start()
+        self.engine = engine
+
+        let sampler = TunnelStatsSampler(settings: settings)
+        sampler.start()
+        statsSampler = sampler
+
+        SharedLogging.log("Tunnel established (fd \(tunFd), MTU \(mtu)).", category: .vpn)
+        completionHandler(nil)
+    }
+
     public override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLogging.log("Stopping Packet Tunnel Provider... Reason: \(reason.rawValue)", category: .vpn)
-        
+
+        statsSampler?.stop()
+        statsSampler = nil
+
         localProxy?.stop()
         localProxy = nil
-        tunnelThread = nil
-        
+
+        // Engine first, so no traffic flows while the dispatcher is down.
+        engine?.stop()
+        engine = nil
+
         completionHandler()
     }
-    
-    private func isIPAddress(_ host: String) -> Bool {
-        let parts = host.components(separatedBy: ".")
-        if parts.count == 4 {
-            return parts.allSatisfy { Int($0) != nil && Int($0)! >= 0 && Int($0)! <= 255 }
+}
+
+// MARK: - TUN file descriptor acquisition
+
+enum TunnelFileDescriptor {
+
+    /// Scans utun0...utun255 via the Darwin control protocol and returns the
+    /// first descriptor that binds successfully. This is the same mechanism
+    /// the Tun2SocksKit engine uses for self-discovery, made explicit here so
+    /// the provider does not depend on private KVC paths.
+    static func tunnelFd() -> Int32? {
+        for index in 0...255 {
+            if let fd = openTunnelFd(utunIndex: index) {
+                return fd
+            }
         }
-        let ipv6Parts = host.components(separatedBy: ":")
-        if ipv6Parts.count >= 2 && ipv6Parts.count <= 8 {
-            return ipv6Parts.allSatisfy { $0.isEmpty || Int($0, radix: 16) != nil }
+        return nil
+    }
+
+    /// Documented fallback: reads the packet flow's socket descriptor through
+    /// KVC. Works on current iOS versions but relies on a private key path.
+    static func kvcPacketFlowFd(of packetFlow: NEPacketTunnelFlow) -> Int32? {
+        guard let fd = packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32, fd > 0 else {
+            return nil
         }
-        return false
+        return fd
+    }
+
+    private static func openTunnelFd(utunIndex: Int) -> Int32? {
+        let name = "utun\(utunIndex)"
+        var interfaceName = [UInt8](repeating: 0, count: Int(IFNAMSIZ))
+        name.withCString { source in
+            _ = strlcpy(&interfaceName, source, interfaceName.count)
+        }
+
+        let fd = socket(AF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+
+        var controlInfo = ctl_info()
+        "com.apple.net.utun_control".withCString { source in
+            _ = strlcpy(&controlInfo.ctl_name, source, Int(CTL_MAX_NAME_LEN))
+        }
+        guard ioctl(fd, CTLIOCGINFO, &controlInfo) == 0 else { return nil }
+
+        var controlAddress = sockaddr_ctl()
+        controlAddress.sc_len = UInt8(MemoryLayout<sockaddr_ctl>.size)
+        controlAddress.sc_family = AF_SYSTEM
+        controlAddress.ss_sysaddr = AF_SYS_CONTROL
+        controlAddress.sc_id = controlInfo.ctl_id
+        controlAddress.sc_unit = UInt32(utunIndex)
+
+        let connectResult = withUnsafePointer(to: &controlAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
+                connect(fd, address, socklen_t(MemoryLayout<sockaddr_ctl>.size))
+            }
+        }
+        guard connectResult == 0 else { return nil }
+
+        var boundName = [UInt8](repeating: 0, count: Int(IFNAMSIZ))
+        var boundNameSize = socklen_t(boundName.count)
+        guard getsockopt(fd, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, &boundName, &boundNameSize) == 0 else {
+            return nil
+        }
+        return fd
     }
 }

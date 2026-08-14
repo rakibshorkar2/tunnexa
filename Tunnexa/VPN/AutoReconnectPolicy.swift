@@ -1,0 +1,29 @@
+import Foundation
+
+/// Backoff schedule for automatic reconnection attempts.
+///
+/// The policy is deliberately simple and deterministic so it can be unit
+/// tested: fixed delay ladder (1, 2, 4, 8, 15, 30 s) and a hard cap on the
+/// number of consecutive attempts. The caller owns the timer; this type only
+/// answers "how long to wait" and "may I try again".
+public enum AutoReconnectPolicy {
+
+    /// Delay ladder, index 0 = first retry.
+    public static let backoffDelays: [TimeInterval] = [1, 2, 4, 8, 15, 30]
+
+    /// Maximum consecutive auto-reconnect attempts before giving up until the
+    /// user (or a status transition) resets the counter.
+    public static let maxAttempts = 5
+
+    /// Delay before the `attempt`-th retry (1-based). Returns 0 for attempt 0
+    /// and the final ladder value for attempts beyond the ladder length.
+    public static func delay(forAttempt attempt: Int) -> TimeInterval {
+        guard attempt > 0 else { return 0 }
+        let index = min(attempt - 1, backoffDelays.count - 1)
+        return backoffDelays[max(0, index)]
+    }
+
+    public static func mayRetry(afterAttempt attempt: Int) -> Bool {
+        return attempt < maxAttempts
+    }
+}

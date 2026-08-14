@@ -4,14 +4,15 @@ struct DiagnosticsView: View {
     @StateObject var vpnViewModel = VPNViewModel()
     @State private var logsText: String = ""
     @State private var isCopied = false
-    
+    @State private var isExported = false
+
     private let timer = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
-    private let sharedDefaults: UserDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa") ?? .standard
-    
+    private let settings = SharedSettings()
+
     var body: some View {
         ZStack {
             Color(hex: "0F172A").ignoresSafeArea()
-            
+
             VStack(spacing: 0) {
                 // Header
                 HStack {
@@ -19,27 +20,42 @@ struct DiagnosticsView: View {
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
                     Spacer()
+
+                    // Export diagnostics bundle
+                    Button(action: exportDiagnostics) {
+                        HStack(spacing: 4) {
+                            Image(systemName: isExported ? "checkmark" : "square.and.arrow.up")
+                            Text(isExported ? "Exported" : "Export")
+                        }
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundColor(isExported ? Color(hex: "10B981") : Color(hex: "6366F1"))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(isExported ? Color(hex: "10B981").opacity(0.1) : Color(hex: "6366F1").opacity(0.1))
+                        .cornerRadius(8)
+                    }
                 }
                 .padding()
                 .background(Color(hex: "1E293B").opacity(0.5))
-                
+
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 20) {
-                        
+
                         // 1. Connection Parameters Card
                         VStack(alignment: .leading, spacing: 14) {
                             Text("TUNNEL PARAMETERS")
                                 .font(.system(size: 11, weight: .bold, design: .rounded))
                                 .foregroundColor(Color(hex: "64748B"))
                                 .tracking(1.0)
-                            
+
                             DiagnosticItemRow(title: "Tunnel Status", value: statusString, color: statusColor)
                             DiagnosticItemRow(title: "IPv4 Interface", value: "198.18.0.1")
-                            DiagnosticItemRow(title: "IPv6 Interface", value: sharedDefaults.bool(forKey: "setting_ipv6") ? "fc00::1" : "Disabled")
+                            DiagnosticItemRow(title: "IPv6 Interface", value: settings.ipv6Enabled ? "fc00::1" : "Disabled")
                             DiagnosticItemRow(title: "Local DNS Address", value: "198.18.0.2")
-                            DiagnosticItemRow(title: "Interface MTU Size", value: String(sharedDefaults.integer(forKey: "setting_mtu") != 0 ? sharedDefaults.integer(forKey: "setting_mtu") : 9000))
-                            DiagnosticItemRow(title: "Packets Sent (Bytes)", value: vpnViewModel.bytesSent)
-                            DiagnosticItemRow(title: "Packets Received (Bytes)", value: vpnViewModel.bytesReceived)
+                            DiagnosticItemRow(title: "Interface MTU Size", value: String(settings.mtuOrDefault))
+                            DiagnosticItemRow(title: "Credential Storage", value: KeychainHelper.shared.activeMode.rawValue)
+                            DiagnosticItemRow(title: "Uploaded", value: vpnViewModel.bytesSent)
+                            DiagnosticItemRow(title: "Downloaded", value: vpnViewModel.bytesReceived)
                         }
                         .padding()
                         .background(Color.white.opacity(0.03))
@@ -139,21 +155,30 @@ struct DiagnosticsView: View {
             self.isCopied = false
         }
     }
-    
-    private var statusString: String {
-        switch vpnViewModel.status {
-        case .connected: return "Connected"
-        case .connecting: return "Connecting..."
-        case .reasserting: return "Reasserting..."
-        case .disconnecting: return "Disconnecting..."
-        default: return "Disconnected"
+
+    private func exportDiagnostics() {
+        guard let url = DiagnosticsRunner.exportToFile(
+            tunnelState: vpnViewModel.state,
+            settings: settings,
+            includeLogs: true
+        ) else { return }
+        UIPasteboard.general.string = url.absoluteString
+        isExported = true
+        SharedLogging.log("Diagnostics exported to \(url.path).", category: .diagnostics)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.isExported = false
         }
     }
-    
+
+    private var statusString: String {
+        return vpnViewModel.state.displayName
+    }
+
     private var statusColor: Color {
-        switch vpnViewModel.status {
+        switch vpnViewModel.state {
         case .connected: return Color(hex: "10B981")
-        case .connecting, .reasserting: return Color(hex: "F59E0B")
+        case .connecting, .reasserting, .preparing: return Color(hex: "F59E0B")
+        case .failed, .invalid: return Color(hex: "F43F5E")
         default: return Color(hex: "EF4444")
         }
     }

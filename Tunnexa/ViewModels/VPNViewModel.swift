@@ -3,36 +3,47 @@ import SwiftUI
 import Combine
 import NetworkExtension
 
+/// Bridges `VPNManager` state to SwiftUI with formatted metrics.
 public class VPNViewModel: ObservableObject {
-    @Published public var status: NEVPNStatus = .disconnected
-    @Published public var sessionDuration: String = "00:00:00"
-    @Published public var uploadSpeed: String = "0 B/s"
-    @Published public var downloadSpeed: String = "0 B/s"
-    @Published public var bytesSent: String = "0 B"
-    @Published public var bytesReceived: String = "0 B"
-    
+
+    @Published public private(set) var state: TunnelState = .unavailable
+    @Published public private(set) var isBusy: Bool = false
+    @Published public private(set) var sessionDuration: String = "00:00:00"
+    @Published public private(set) var uploadSpeed: String = "0 B/s"
+    @Published public private(set) var downloadSpeed: String = "0 B/s"
+    @Published public private(set) var bytesSent: String = "0 B"
+    @Published public private(set) var bytesReceived: String = "0 B"
+
     @Published public var activeError: VPNErrorDetails?
-    
-    private var vpnManager = VPNManager.shared
+
+    private let vpnManager = VPNManager.shared
+    private let settings = SharedSettings()
     private var cancellables = Set<AnyCancellable>()
     private var timer: Timer?
     private var connectionStartTime: Date?
-    private let sharedDefaults: UserDefaults = UserDefaults(suiteName: "group.com.rakib.tunnexa") ?? .standard
-    
+
     public init() {
-        vpnManager.$status
+        vpnManager.$state
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] newStatus in
-                self?.status = newStatus
-                self?.handleStatusChange(newStatus)
+            .sink { [weak self] newState in
+                self?.state = newState
+                self?.handleStateChange(newState)
+            }
+            .store(in: &cancellables)
+
+        vpnManager.$isBusy
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] busy in
+                self?.isBusy = busy
             }
             .store(in: &cancellables)
     }
-    
+
     public func toggleConnection() {
-        if status == .connected {
+        switch state {
+        case .connected:
             vpnManager.stopVPN()
-        } else if status == .disconnected {
+        case .disconnected, .failed:
             activeError = nil
             vpnManager.startVPN { [weak self] result in
                 DispatchQueue.main.async {
@@ -44,82 +55,80 @@ public class VPNViewModel: ObservableObject {
                     }
                 }
             }
+        case .connecting, .reasserting, .preparing, .disconnecting:
+            break // in progress
+        case .unavailable, .invalid:
+            activeError = VPNErrorDetails(
+                domain: "Tunnexa.State",
+                code: 12,
+                message: "The VPN profile is unavailable or invalid. Re-open the app or re-create the profile.",
+                environment: VPNEnvironmentDetector.detectEnvironment()
+            )
         }
     }
-    
-    private func handleStatusChange(_ newStatus: NEVPNStatus) {
-        if newStatus == .connected {
-            // Reset speeds and start timer
+
+    private func handleStateChange(_ newState: TunnelState) {
+        if newState.isConnected {
             connectionStartTime = Date()
             startTimer()
-        } else if newStatus == .disconnected || newStatus == .invalid {
+        } else if newState == .disconnected || newState == .failed || newState == .unavailable || newState == .invalid {
             stopTimer()
             sessionDuration = "00:00:00"
             uploadSpeed = "0 B/s"
             downloadSpeed = "0 B/s"
-            
-            // Do not reset total bytes immediately so user can see last session stats,
-            // but reset speed variables in shared settings.
-            sharedDefaults.set(0, forKey: "stat_upload_speed")
-            sharedDefaults.set(0, forKey: "stat_download_speed")
+            settings.set(Int64(0), forKey: SettingsKey.statUploadSpeed)
+            settings.set(Int64(0), forKey: SettingsKey.statDownloadSpeed)
         }
     }
-    
+
     private func startTimer() {
         timer?.invalidate()
-        
-        // Reset local stats on new session start
-        sharedDefaults.set(0, forKey: "stat_upload_bytes")
-        sharedDefaults.set(0, forKey: "stat_download_bytes")
-        sharedDefaults.set(0, forKey: "stat_upload_speed")
-        sharedDefaults.set(0, forKey: "stat_download_speed")
-        
+        // Reset per-session counters.
+        settings.set(Int64(0), forKey: SettingsKey.statUploadBytes)
+        settings.set(Int64(0), forKey: SettingsKey.statDownloadBytes)
+        settings.set(Int64(0), forKey: SettingsKey.statUploadSpeed)
+        settings.set(Int64(0), forKey: SettingsKey.statDownloadSpeed)
+        settings.set(Int64(Date().timeIntervalSince1970), forKey: SettingsKey.statTunnelStart)
+
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.updateMetrics()
         }
     }
-    
+
     private func stopTimer() {
         timer?.invalidate()
         timer = nil
         connectionStartTime = nil
     }
-    
+
     private func updateMetrics() {
-        // 1. Session Duration
         if let startTime = connectionStartTime {
             let elapsed = Int(Date().timeIntervalSince(startTime))
-            let hours = elapsed / 3600
-            let minutes = (elapsed % 3600) / 60
-            let seconds = elapsed % 60
-            sessionDuration = String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+            sessionDuration = String(format: "%02d:%02d:%02d", elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60)
         }
-        
-        // 2. Traffic Speed & Bytes
-        let upSpeed = sharedDefaults.integer(forKey: "stat_upload_speed")
-        let downSpeed = sharedDefaults.integer(forKey: "stat_download_speed")
-        let totalUp = sharedDefaults.integer(forKey: "stat_upload_bytes")
-        let totalDown = sharedDefaults.integer(forKey: "stat_download_bytes")
-        
+
+        let upSpeed = settings.int64(SettingsKey.statUploadSpeed)
+        let downSpeed = settings.int64(SettingsKey.statDownloadSpeed)
+        let totalUp = settings.int64(SettingsKey.statUploadBytes)
+        let totalDown = settings.int64(SettingsKey.statDownloadBytes)
+
         uploadSpeed = formatBytesPerSecond(upSpeed)
         downloadSpeed = formatBytesPerSecond(downSpeed)
-        
         bytesSent = formatBytes(totalUp)
         bytesReceived = formatBytes(totalDown)
     }
-    
-    private func formatBytes(_ bytes: Int) -> String {
+
+    private func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useBytes, .useKB, .useMB, .useGB]
         formatter.countStyle = .file
-        return formatter.string(fromByteCount: Int64(bytes))
+        return formatter.string(fromByteCount: bytes)
     }
-    
-    private func formatBytesPerSecond(_ bytes: Int) -> String {
+
+    private func formatBytesPerSecond(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useBytes, .useKB, .useMB, .useGB]
         formatter.countStyle = .file
-        let speedStr = formatter.string(fromByteCount: Int64(bytes))
-        return "\(speedStr)/s"
+        return "\(formatter.string(fromByteCount: bytes))/s"
     }
 }

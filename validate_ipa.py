@@ -14,6 +14,10 @@ Checks:
   5. Extension NSExtensionPointIdentifier = com.apple.networkextension.packet-tunnel
   6. Extension executable present
   7. Extension NSExtensionPrincipalClass is set
+  8. Main app executable present
+  9. Signing state detected and reported (signed / unsigned)
+ 10. Signed bundles carry _CodeSignature + embedded.mobileprovision
+ 11. App and extension signing states are consistent
 
 Exit codes:
   0 = All checks pass
@@ -47,6 +51,15 @@ def read_plist(path: str) -> dict:
         return plistlib.load(f)
 
 
+def is_bundle_signed(app_path: str) -> bool:
+    signature_dir = os.path.join(app_path, "_CodeSignature")
+    return os.path.isdir(signature_dir) and os.path.isfile(os.path.join(signature_dir, "CodeResources"))
+
+
+def has_provisioning_profile(app_path: str) -> bool:
+    return os.path.isfile(os.path.join(app_path, "embedded.mobileprovision"))
+
+
 def validate_app(app_path: str) -> bool:
     print(f"\n=== Validating: {app_path} ===\n")
     all_passed = True
@@ -72,6 +85,27 @@ def validate_app(app_path: str) -> bool:
     else:
         fail(f"Main app CFBundlePackageType: '{package_type}' (expected 'APPL')")
         all_passed = False
+
+    main_executable = main_plist.get("CFBundleExecutable", "Tunnexa")
+    main_executable_path = os.path.join(app_path, main_executable)
+    if os.path.isfile(main_executable_path):
+        size = os.path.getsize(main_executable_path)
+        ok(f"Main app executable '{main_executable}' present ({size:,} bytes)")
+    else:
+        fail(f"Main app executable '{main_executable}' NOT found at {main_executable_path}")
+        all_passed = False
+
+    # --- Signing State (informational for unsigned sideload builds) ---
+    app_signed = is_bundle_signed(app_path)
+    if app_signed:
+        ok("App bundle is SIGNED (_CodeSignature/CodeResources present)")
+        if has_provisioning_profile(app_path):
+            ok("Provisioning profile embedded (embedded.mobileprovision)")
+        else:
+            fail("App bundle is signed but no embedded.mobileprovision was found")
+            all_passed = False
+    else:
+        ok("App bundle is UNSIGNED (TrollStore / sideload style, built with CODE_SIGNING_ALLOWED=NO)")
 
     # --- Extension Checks ---
     plugins_dir = os.path.join(app_path, "PlugIns")
@@ -138,6 +172,15 @@ def validate_app(app_path: str) -> bool:
         ok(f"Extension executable '{ext_executable_name}' present ({size:,} bytes)")
     else:
         fail(f"Extension executable '{ext_executable_name}' NOT found at {ext_executable_path}")
+        all_passed = False
+
+    # --- Signing consistency ---
+    ext_signed = is_bundle_signed(extension_path)
+    if ext_signed == app_signed:
+        ok("Signing state consistent between app and extension")
+    else:
+        fail(f"Signing mismatch: app is {'signed' if app_signed else 'unsigned'}, "
+             f"extension is {'signed' if ext_signed else 'unsigned'}")
         all_passed = False
 
     print()

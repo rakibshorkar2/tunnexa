@@ -44,11 +44,29 @@ jobs:
         run: |
           python3 generate_project.py
 
+      - name: Verify Generator Determinism
+        run: |
+          python3 generate_project.py
+          if git diff --exit-code -- Tunnexa.xcodeproj/project.pbxproj; then
+            echo "Generator is deterministic — pbxproj unchanged after regeneration."
+          else
+            echo "ERROR: generate_project.py is NOT deterministic — pbxproj changed."
+            exit 1
+          fi
+
       - name: Update Bundle Version (CFBundleVersion)
         run: |
           echo "Setting CFBundleVersion to ${{ github.run_number }}..."
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" Tunnexa/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" TunnexaPacketTunnel/Info.plist
+
+      - name: Cache Swift Package Dependencies
+        uses: actions/cache@v4
+        with:
+          path: SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
 
       - name: Resolve Swift Package Dependencies
         run: |
@@ -56,6 +74,23 @@ jobs:
             -project Tunnexa.xcodeproj \
             -scheme Tunnexa \
             -clonedSourcePackagesDirPath SourcePackages
+
+      - name: Run Unit Tests (Simulator)
+        run: |
+          DEVICE_NAME=$(xcrun simctl list devices available -j | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+devices = [d['name'] for runtime in data['devices'].values() for d in runtime if d['isAvailable']]
+print(devices[0] if devices else 'iPhone 16')
+")
+          echo "Using simulator: $DEVICE_NAME"
+          xcodebuild test \
+            -project Tunnexa.xcodeproj \
+            -scheme Tunnexa \
+            -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
+            -clonedSourcePackagesDirPath SourcePackages \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
 
       - name: Clean & Build Archive (Unsigned)
         run: |
@@ -87,6 +122,11 @@ jobs:
           echo "Xcode Version: $(xcodebuild -version | head -1)" >> build-info.txt
           echo "SDK: iOS $(xcrun --sdk iphoneos --show-sdk-version || echo '26.6')" >> build-info.txt
           echo "Date: $(date)" >> build-info.txt
+
+      - name: Validate IPA Packaging
+        run: |
+          python3 validate_ipa.py --app build/Tunnexa.xcarchive/Products/Applications/Tunnexa.app
+          python3 validate_ipa.py --ipa build/Tunnexa-unsigned-build-${{ github.run_number }}.ipa
 
       - name: Create GitHub Release on Push
         id: create_release

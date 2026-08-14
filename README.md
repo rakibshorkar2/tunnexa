@@ -38,7 +38,7 @@ Local SOCKS5 Dispatcher & Router (Swift NWListener)
 - **DNS-over-SOCKS5**: Employs `mapdns` to capture local DNS queries on `198.18.0.2`, map domains to virtual IPs (e.g. `100.64.0.0/10`), and perform remote name resolution via domain SOCKS5 requests, preventing DNS leaks.
 - **Clash YAML Configuration Import**: Supports importing `.yaml` / `.yml` configurations directly from the iOS Files app or Share Sheet.
 - **Proxy Group Selector & Load Balancing**: Parses group selects and round-robin load balancers, switching between active proxies dynamically.
-- **Proxy Health & Latency Tester**: Tests TCP handshake and HTTP GET performance directly through each proxy, showing connection delays.
+- **Proxy Health & Latency Tester**: Runs a staged RFC 1928/1929 SOCKS5 probe (TCP connect → greeting → authentication → CONNECT) against each proxy with per-stage timing, showing live latency and a precise failure stage when a proxy is unreachable.
 - **Security First**: Automatically sanitizes passwords and usernames, redacting them from connection logs and sharing configurations without plain credentials.
 
 ---
@@ -68,11 +68,13 @@ Apple restricts `NEPacketTunnelProvider` network extensions to signed developer 
 
 ### 3. CI/CD Releases (GitHub Actions)
 Tunnexa includes a `.github/workflows/build.yml` file which runs on every push:
-1. Derives unique build numbers from the action run numbers.
-2. Resolves SPM packages (such as `Tun2SocksKit`).
-3. Compiles both targets without signing restrictions.
-4. Packages the app into an unsigned `.ipa` and `.zip` file.
-5. Deploys a GitHub Release with the build number as tag (e.g., `build-123`) and uploads the release assets.
+1. Regenerates the Xcode project and verifies the generator is deterministic (the checked-in `project.pbxproj` must not change on re-generation).
+2. Derives unique build numbers from the action run numbers.
+3. Resolves SPM packages (such as `Tun2SocksKit`) with a dependency cache.
+4. Runs the full unit test suite (routing, YAML parsing, SOCKS5 protocol, health tester, credential store, auto-reconnect, log redaction) on an iOS Simulator.
+5. Compiles both targets without signing restrictions.
+6. Packages the app into an unsigned `.ipa` and `.zip` file and validates the packaging with `validate_ipa.py` (bundle IDs, embedded extension, signing state).
+7. Deploys a GitHub Release with the build number as tag (e.g., `build-123`) and uploads the release assets.
 
 ---
 
@@ -81,9 +83,10 @@ Tunnexa includes a `.github/workflows/build.yml` file which runs on every push:
 ### Local Diagnostic Panel
 Inside the app, navigate to the **Diagnostics** tab. It reveals:
 - Current tunnel interface status (Connected/Disconnected).
-- Interface IP address (`198.18.0.1`), MTU, and DNS mapping server (`198.18.0.2`).
+- Interface IP address (`198.18.0.1`), MTU, DNS mapping server (`198.18.0.2`), and credential storage mode.
 - Total upload and download data.
 - Live console log output with redacted credentials.
+- An **Export** button that writes a redacted diagnostics bundle (state, settings, issues, log tail) to Files.
 
 ### Verifying Routing
 1. Import the configuration file: `bypassempire (2).yaml`.

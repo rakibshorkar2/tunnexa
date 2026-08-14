@@ -18,17 +18,18 @@ public struct VPNErrorDetails: Identifiable, Codable {
     ) {
         self.timestamp = Date()
         self.environment = environment
-        
+
         let nsError = error as NSError
         self.domain = nsError.domain
         self.code = nsError.code
-        self.message = nsError.localizedDescription
-        self.failureReason = nsError.localizedFailureReason
-        
+        // Error descriptions can carry credential material; redact before persisting.
+        self.message = SharedLogging.redactCredentials(nsError.localizedDescription)
+        self.failureReason = nsError.localizedFailureReason.map { SharedLogging.redactCredentials($0) }
+
         if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
             self.underlyingDomain = underlying.domain
             self.underlyingCode = underlying.code
-            self.underlyingMessage = underlying.localizedDescription
+            self.underlyingMessage = SharedLogging.redactCredentials(underlying.localizedDescription)
         } else {
             self.underlyingDomain = nil
             self.underlyingCode = nil
@@ -84,6 +85,8 @@ public struct VPNErrorDetails: Identifiable, Codable {
                 return "VPN Configuration Stale: The VPN profile needs to be reloaded from iOS preferences."
             case 5: // ConfigurationReadWriteFailed / Permission denied
                 return "VPN Permission Denied: iOS denied read/write access to system VPN preferences. Ensure your provisioning profile includes the 'com.apple.developer.networking.networkextension' entitlement."
+            case 6: // ConfigurationUnknown
+                return "VPN Configuration Unknown: The system returned an unknown profile state. Re-create the VPN profile from Settings and try again."
             default:
                 break
             }
