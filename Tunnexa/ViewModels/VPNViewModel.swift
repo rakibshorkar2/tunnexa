@@ -11,6 +11,8 @@ public class VPNViewModel: ObservableObject {
     @Published public var bytesSent: String = "0 B"
     @Published public var bytesReceived: String = "0 B"
     
+    @Published public var errorMessage: String?
+    
     private var vpnManager = VPNManager.shared
     private var cancellables = Set<AnyCancellable>()
     private var timer: Timer?
@@ -31,10 +33,14 @@ public class VPNViewModel: ObservableObject {
         if status == .connected {
             vpnManager.stopVPN()
         } else if status == .disconnected {
-            do {
-                try vpnManager.startVPN()
-            } catch {
-                SharedLogging.log("Failed to start VPN: \(error.localizedDescription)", category: .vpn)
+            errorMessage = nil
+            vpnManager.startVPN { [weak self] error in
+                DispatchQueue.main.async {
+                    if let error = error {
+                        self?.errorMessage = error.localizedDescription
+                        SharedLogging.log("Failed to start VPN: \(error.localizedDescription)", category: .vpn)
+                    }
+                }
             }
         }
     }

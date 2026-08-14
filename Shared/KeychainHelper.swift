@@ -12,7 +12,7 @@ public class KeychainHelper {
     private init() {}
     
     private func getSharedDefaults() -> UserDefaults? {
-        return UserDefaults(suiteName: accessGroup)
+        return UserDefaults(suiteName: accessGroup) ?? UserDefaults.standard
     }
     
     public func setPassword(_ password: String, forProxyId proxyId: String) {

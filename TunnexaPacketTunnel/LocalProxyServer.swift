@@ -341,10 +341,10 @@ public class LocalProxyServer {
     private func performUpstreamHandshake(_ connection: NWConnection, proxy: SOCKS5Proxy, targetHost: String, targetPort: Int, completion: @escaping (Bool) -> Void) {
         var methods = [UInt8]([0]) // No auth
         
-        // Check keychain for password since config usually redacts it
+        // Check keychain/defaults for password since config usually redacts it
         let resolvedPassword = proxy.password ?? KeychainHelper.shared.getPassword(forProxyId: proxy.id.uuidString)
         
-        if proxy.username != nil && resolvedPassword != nil {
+        if proxy.username != nil {
             methods.append(2) // Username/password auth
         }
         
@@ -371,7 +371,8 @@ public class LocalProxyServer {
                 
                 if method == 0 {
                     self.sendUpstreamRequest(connection, targetHost: targetHost, targetPort: targetPort, completion: completion)
-                } else if method == 2, let username = proxy.username, let password = resolvedPassword {
+                } else if method == 2, let username = proxy.username {
+                    let password = resolvedPassword ?? ""
                     self.performUpstreamAuth(connection, username: username, password: password) { authSuccess in
                         if authSuccess {
                             self.sendUpstreamRequest(connection, targetHost: targetHost, targetPort: targetPort, completion: completion)

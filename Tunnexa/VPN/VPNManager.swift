@@ -38,9 +38,7 @@ public class VPNManager: ObservableObject {
                 let protocolConfig = NETunnelProviderProtocol()
                 
                 protocolConfig.providerBundleIdentifier = "com.rakib.tunnexa.PacketTunnel"
-                protocolConfig.serverAddress = "TunnexaLocalTunnel" // Required dummy address
-                
-                // Configure local-network inclusion and kill switch options in protocol settings
+                protocolConfig.serverAddress = "127.0.0.1" // Required server address
                 protocolConfig.username = "TunnexaUser"
                 
                 newManager.protocolConfiguration = protocolConfig
@@ -81,29 +79,64 @@ public class VPNManager: ObservableObject {
             .store(in: &cancellables)
     }
     
-    public func startVPN() throws {
-        guard let manager = manager else {
-            throw NSError(domain: "Tunnexa", code: 5, userInfo: [NSLocalizedDescriptionKey: "VPN Manager is not initialized"])
+    public func startVPN(completion: @escaping (Error?) -> Void) {
+        if let manager = self.manager {
+            self.startTunnel(with: manager, completion: completion)
+        } else {
+            // Attempt on-demand load and save
+            self.loadProviderManager { [weak self] error in
+                guard let self = self else { return }
+                if let error = error {
+                    let customError = NSError(
+                        domain: "Tunnexa",
+                        code: 5,
+                        userInfo: [NSLocalizedDescriptionKey: "VPN Permission Denied (\(error.localizedDescription)).\n\nLiveContainer does not allow guest apps to install NetworkExtension VPN profiles. Sideload Tunnexa directly using TrollStore, AltStore, or Sideloadly."]
+                    )
+                    completion(customError)
+                    return
+                }
+                
+                if let manager = self.manager {
+                    self.startTunnel(with: manager, completion: completion)
+                } else {
+                    let err = NSError(
+                        domain: "Tunnexa",
+                        code: 5,
+                        userInfo: [NSLocalizedDescriptionKey: "Unable to initialize VPN Profile on this environment."]
+                    )
+                    completion(err)
+                }
+            }
         }
-        
-        // Ensure manager is enabled
+    }
+    
+    private func startTunnel(with manager: NETunnelProviderManager, completion: @escaping (Error?) -> Void) {
         if !manager.isEnabled {
             manager.isEnabled = true
             manager.saveToPreferences { error in
                 if let error = error {
-                    SharedLogging.log("Failed to enable VPN manager profile: \(error.localizedDescription)", category: .vpn)
+                    SharedLogging.log("Failed to enable VPN profile: \(error.localizedDescription)", category: .vpn)
+                    completion(error)
                 } else {
                     do {
                         try manager.connection.startVPNTunnel()
                         SharedLogging.log("Initiated VPN tunnel connection.", category: .vpn)
+                        completion(nil)
                     } catch {
-                        SharedLogging.log("Failed to start VPN tunnel after enabling profile: \(error.localizedDescription)", category: .vpn)
+                        SharedLogging.log("Failed to start VPN tunnel: \(error.localizedDescription)", category: .vpn)
+                        completion(error)
                     }
                 }
             }
         } else {
-            try manager.connection.startVPNTunnel()
-            SharedLogging.log("Initiated VPN tunnel connection.", category: .vpn)
+            do {
+                try manager.connection.startVPNTunnel()
+                SharedLogging.log("Initiated VPN tunnel connection.", category: .vpn)
+                completion(nil)
+            } catch {
+                SharedLogging.log("Failed to start VPN tunnel: \(error.localizedDescription)", category: .vpn)
+                completion(error)
+            }
         }
     }
     

@@ -198,6 +198,14 @@ struct MainView: View {
                 ImportConfigSheet()
                     .environmentObject(proxyViewModel)
             }
+            .alert("VPN Connection", isPresented: Binding(
+                get: { vpnViewModel.errorMessage != nil },
+                set: { if !$0 { vpnViewModel.errorMessage = nil } }
+            )) {
+                Button("OK") { vpnViewModel.errorMessage = nil }
+            } message: {
+                Text(vpnViewModel.errorMessage ?? "")
+            }
         }
     }
     
