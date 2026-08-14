@@ -5,7 +5,7 @@ public class LocalProxyServer {
     private let port: UInt16
     private let sharedDefaults: UserDefaults
     private var listener: NWListener?
-    private var activeConnections: Set<NWConnection> = []
+    private var activeConnections: [ObjectIdentifier: NWConnection] = [:]
     private let queue = DispatchQueue(label: "com.rakib.tunnexa.localproxy")
     
     var config: ProxyConfiguration?
@@ -61,7 +61,7 @@ public class LocalProxyServer {
     
     public func stop() {
         listener?.cancel()
-        for connection in activeConnections {
+        for connection in activeConnections.values {
             connection.cancel()
         }
         activeConnections.removeAll()
@@ -69,10 +69,11 @@ public class LocalProxyServer {
     }
     
     private func handleNewConnection(_ connection: NWConnection) {
-        activeConnections.insert(connection)
+        let id = ObjectIdentifier(connection)
+        activeConnections[id] = connection
         connection.stateUpdateHandler = { [weak self] state in
             if case .cancelled = state {
-                self?.activeConnections.remove(connection)
+                self?.activeConnections.removeValue(forKey: id)
             }
         }
         connection.start(queue: queue)
