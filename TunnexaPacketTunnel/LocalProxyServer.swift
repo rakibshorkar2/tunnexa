@@ -1414,36 +1414,44 @@ private final class UDPAssociation {
                 return
             }
             if data[1] == 2 {
-                guard let username = proxy.username else {
-                    completion(false)
-                    return
-                }
-                let usernameBytes = Array(username.utf8)
-                let passwordBytes = Array(resolvedPassword ?? "".utf8)
-                guard usernameBytes.count <= 255, passwordBytes.count <= 255 else {
-                    completion(false)
-                    return
-                }
-                var auth = Data([1, UInt8(usernameBytes.count)])
-                auth.append(contentsOf: usernameBytes)
-                auth.append(UInt8(passwordBytes.count))
-                auth.append(contentsOf: passwordBytes)
-                proxyTCP.send(content: auth, completion: .contentProcessed { error in
-                    guard error == nil else {
-                        completion(false)
-                        return
-                    }
-                    proxyTCP.receive(minimumIncompleteLength: 2, maximumLength: 2) { authData, _, _, error in
-                        guard let authData = authData, authData.count == 2, error == nil, authData[1] == 0 else {
-                            completion(false)
-                            return
-                        }
-                        self.sendAssociate(proxyTCP, queue: queue, completion: completion)
-                    }
-                })
+                self.performUserPassAuth(proxyTCP, proxy: proxy, resolvedPassword: resolvedPassword, queue: queue, completion: completion)
                 return
             }
             guard data[1] == 0 else {
+                completion(false)
+                return
+            }
+            self.sendAssociate(proxyTCP, queue: queue, completion: completion)
+        }
+    }
+
+    private func performUserPassAuth(_ proxyTCP: NWConnection, proxy: SOCKS5Proxy, resolvedPassword: String?, queue: DispatchQueue, completion: @escaping (Bool) -> Void) {
+        guard let username = proxy.username else {
+            completion(false)
+            return
+        }
+        let usernameBytes = Array(username.utf8)
+        let passwordBytes = Array(resolvedPassword ?? "".utf8)
+        guard usernameBytes.count <= 255, passwordBytes.count <= 255 else {
+            completion(false)
+            return
+        }
+        var auth = Data([1, UInt8(usernameBytes.count)])
+        auth.append(contentsOf: usernameBytes)
+        auth.append(UInt8(passwordBytes.count))
+        auth.append(contentsOf: passwordBytes)
+        proxyTCP.send(content: auth, completion: .contentProcessed { error in
+            guard error == nil else {
+                completion(false)
+                return
+            }
+            self.readAuthReply(proxyTCP, queue: queue, completion: completion)
+        })
+    }
+
+    private func readAuthReply(_ proxyTCP: NWConnection, queue: DispatchQueue, completion: @escaping (Bool) -> Void) {
+        proxyTCP.receive(minimumIncompleteLength: 2, maximumLength: 2) { [weak self] authData, _, _, error in
+            guard let self = self, let authData = authData, authData.count == 2, error == nil, authData[1] == 0 else {
                 completion(false)
                 return
             }
