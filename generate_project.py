@@ -207,11 +207,16 @@ MAIN_GROUP_ID = group_id(0x01)
 SHARED_GROUP_ID = group_id(0x02)
 APP_GROUP_ID = group_id(0x03)
 APP_SUBGROUP_IDS = {
-    "App": file_ref_id(0x1F),
-    "Views": file_ref_id(0x2F),
-    "ViewModels": file_ref_id(0x3F),
-    "YAML": file_ref_id(0x5F),
-    "VPN": file_ref_id(0x6F),
+    # NOTE: subgroups are PBXGroups — they MUST use the group_id() namespace.
+    # Using file_ref_id() here collides with real file references (e.g. the
+    # "App" subgroup vs TunnelEngine.swift, both file_ref_id(0x1F)) and makes
+    # Xcode drop one of the objects, silently removing a source file from the
+    # target. Kept at the same seq values so existing IDs stay stable.
+    "App": group_id(0x1F),
+    "Views": group_id(0x2F),
+    "ViewModels": group_id(0x3F),
+    "YAML": group_id(0x5F),
+    "VPN": group_id(0x6F),
 }
 EXT_GROUP_ID = group_id(0x04)
 TESTS_GROUP_ID = group_id(0x05)
@@ -1006,15 +1011,27 @@ def write_plists():
 
 
 def validate_project(pbxproj_path):
-    """Integrity check: every referenced object ID must be defined."""
+    """Integrity check: every referenced object ID must be defined exactly once.
+
+    Two objects sharing one ID (e.g. a subgroup allocated from the file-ref
+    namespace) silently makes Xcode drop one of them — a source file can
+    vanish from a target without any 'undefined reference' symptom.
+    """
     with open(pbxproj_path, encoding="utf-8") as f:
         content = f.read()
 
-    defined = set(re.findall(r"^\t\t([0-9A-F]{24}) ", content, re.M))
+    defined = re.findall(r"^\t\t([0-9A-F]{24}) ", content, re.M)
+    duplicate_ids = sorted({d for d in defined if defined.count(d) > 1})
+    if duplicate_ids:
+        for dup in duplicate_ids:
+            print(f"  [FAIL] Object ID defined more than once: {dup}")
+        return False
+
+    defined_set = set(defined)
     referenced = set(re.findall(r"= ([0-9A-F]{24}) ", content))
     referenced |= set(re.findall(r"remoteGlobalIDString = ([0-9A-F]{24})", content))
 
-    missing = referenced - defined
+    missing = referenced - defined_set
     if missing:
         for m in sorted(missing):
             print(f"  [FAIL] Undefined object ID referenced: {m}")
