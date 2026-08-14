@@ -77,12 +77,7 @@ jobs:
 
       - name: Run Unit Tests (Simulator)
         run: |
-          DEVICE_NAME=$(xcrun simctl list devices available -j | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-devices = [d['name'] for runtime in data['devices'].values() for d in runtime if d['isAvailable']]
-print(devices[0] if devices else 'iPhone 16')
-")
+          DEVICE_NAME=$(xcrun simctl list devices available -j | python3 -c "import json,sys; data=json.load(sys.stdin); devices=[d['name'] for runtime in data['devices'].values() for d in runtime if d['isAvailable']]; print(devices[0] if devices else 'iPhone 16')")
           echo "Using simulator: $DEVICE_NAME"
           xcodebuild test \
             -project Tunnexa.xcodeproj \
