@@ -1398,56 +1398,60 @@ private final class UDPAssociation {
             methods.append(2)
         }
         let greeting = Data([5, UInt8(methods.count)] + methods)
-        proxyTCP.send(content: greeting, completion: .contentProcessed { [weak self] error in
+        proxyTCP.send(content: greeting, completion: .contentProcessed { error in
             guard error == nil else {
                 completion(false)
                 return
             }
-            proxyTCP.receive(minimumIncompleteLength: 2, maximumLength: 2) { [weak self] data, _, _, error in
-                guard let self = self, let data = data, data.count == 2, error == nil else {
-                    completion(false)
-                    return
-                }
-                if data[1] == 2 {
-                    guard let username = proxy.username else {
-                        completion(false)
-                        return
-                    }
-                    let usernameBytes = Array(username.utf8)
-                    let passwordBytes = Array(resolvedPassword ?? "".utf8)
-                    guard usernameBytes.count <= 255, passwordBytes.count <= 255 else {
-                        completion(false)
-                        return
-                    }
-                    var auth = Data([1, UInt8(usernameBytes.count)])
-                    auth.append(contentsOf: usernameBytes)
-                    auth.append(UInt8(passwordBytes.count))
-                    auth.append(contentsOf: passwordBytes)
-                    proxyTCP.send(content: auth, completion: .contentProcessed { error in
-                        guard error == nil else {
-                            completion(false)
-                            return
-                        }
-                        proxyTCP.receive(minimumIncompleteLength: 2, maximumLength: 2) { authData, _, _, error in
-                            guard let authData = authData, authData.count == 2, error == nil, authData[1] == 0 else {
-                                completion(false)
-                                return
-                            }
-                            self.sendAssociate(proxyTCP, completion: completion)
-                        }
-                    })
-                    return
-                }
-                guard data[1] == 0 else {
-                    completion(false)
-                    return
-                }
-                self.sendAssociate(proxyTCP, completion: completion)
-            }
+            self.handleGreetingReply(proxyTCP, proxy: proxy, resolvedPassword: resolvedPassword, queue: queue, completion: completion)
         })
     }
 
-    private func sendAssociate(_ proxyTCP: NWConnection, completion: @escaping (Bool) -> Void) {
+    private func handleGreetingReply(_ proxyTCP: NWConnection, proxy: SOCKS5Proxy, resolvedPassword: String?, queue: DispatchQueue, completion: @escaping (Bool) -> Void) {
+        proxyTCP.receive(minimumIncompleteLength: 2, maximumLength: 2) { [weak self] data, _, _, error in
+            guard let self = self, let data = data, data.count == 2, error == nil else {
+                completion(false)
+                return
+            }
+            if data[1] == 2 {
+                guard let username = proxy.username else {
+                    completion(false)
+                    return
+                }
+                let usernameBytes = Array(username.utf8)
+                let passwordBytes = Array(resolvedPassword ?? "".utf8)
+                guard usernameBytes.count <= 255, passwordBytes.count <= 255 else {
+                    completion(false)
+                    return
+                }
+                var auth = Data([1, UInt8(usernameBytes.count)])
+                auth.append(contentsOf: usernameBytes)
+                auth.append(UInt8(passwordBytes.count))
+                auth.append(contentsOf: passwordBytes)
+                proxyTCP.send(content: auth, completion: .contentProcessed { error in
+                    guard error == nil else {
+                        completion(false)
+                        return
+                    }
+                    proxyTCP.receive(minimumIncompleteLength: 2, maximumLength: 2) { authData, _, _, error in
+                        guard let authData = authData, authData.count == 2, error == nil, authData[1] == 0 else {
+                            completion(false)
+                            return
+                        }
+                        self.sendAssociate(proxyTCP, queue: queue, completion: completion)
+                    }
+                })
+                return
+            }
+            guard data[1] == 0 else {
+                completion(false)
+                return
+            }
+            self.sendAssociate(proxyTCP, queue: queue, completion: completion)
+        }
+    }
+
+    private func sendAssociate(_ proxyTCP: NWConnection, queue: DispatchQueue, completion: @escaping (Bool) -> Void) {
         let associate = Data([5, 3, 0, 1, 0, 0, 0, 0, 0, 0])
         proxyTCP.send(content: associate, completion: .contentProcessed { error in
             guard error == nil else {
@@ -1476,7 +1480,7 @@ private final class UDPAssociation {
                                 completion(false)
                                 return
                             }
-                            self.completeAssociate(proxyTCP, atyp: atyp, addrData: addrData, length: length, completion: completion)
+                            self.completeAssociate(proxyTCP, atyp: atyp, addrData: addrData, length: length, queue: queue, completion: completion)
                         }
                     }
                     return
@@ -1489,13 +1493,13 @@ private final class UDPAssociation {
                         completion(false)
                         return
                     }
-                    self.completeAssociate(proxyTCP, atyp: atyp, addrData: addrData, length: remaining, completion: completion)
+                    self.completeAssociate(proxyTCP, atyp: atyp, addrData: addrData, length: remaining, queue: queue, completion: completion)
                 }
             }
         })
     }
 
-    private func completeAssociate(_ proxyTCP: NWConnection, atyp: UInt8, addrData: Data, length: Int, completion: @escaping (Bool) -> Void) {
+    private func completeAssociate(_ proxyTCP: NWConnection, atyp: UInt8, addrData: Data, length: Int, queue: DispatchQueue, completion: @escaping (Bool) -> Void) {
         var relayHost = ""
         switch atyp {
         case 1:
