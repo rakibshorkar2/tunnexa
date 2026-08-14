@@ -109,6 +109,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
             tunnel:
               name: tun0
               mtu: \(settings.mtu?.intValue ?? 9000)
+              fd: \(tunFd)
               ipv4: 198.18.0.1
             """
             
@@ -129,30 +130,18 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
               netmask: 255.192.0.0
               cache-size: 10000
             misc:
+              task-stack-size: 20480
+              connect-timeout: 5000
+              read-write-timeout: 60000
               log-file: stderr
               log-level: warn
+              limit-nofile: 65535
             """
-            
-            // Write config to app group temporary path
-            guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.rakib.tunnexa") else {
-                let error = NSError(domain: "Tunnexa", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to get App Group container path"])
-                completionHandler(error)
-                return
-            }
-            
-            let configURL = containerURL.appendingPathComponent("tun2socks_config.yml")
-            do {
-                try configYml.write(to: configURL, atomically: true, encoding: .utf8)
-            } catch {
-                SharedLogging.log("Failed to write tun2socks config file: \(error.localizedDescription)", category: .vpn)
-                completionHandler(error)
-                return
-            }
             
             // 5. Spawn background thread to run the blocking Tun2SocksKit engine
             self.tunnelThread = Thread {
                 SharedLogging.log("Starting Socks5Tunnel background loop...", category: .tunnel)
-                let exitCode = Socks5Tunnel.run(withFileDescriptor: tunFd, configFilePath: configURL.path)
+                let exitCode = Socks5Tunnel.run(withConfig: .string(content: configYml))
                 SharedLogging.log("Socks5Tunnel exited with code \(exitCode)", category: .tunnel)
             }
             self.tunnelThread?.name = "Tunnexa.TunnelThread"
