@@ -31,27 +31,27 @@ struct SettingsView: View {
                     // 1. VPN Section
                     Section(header: Text("VPN CONFIGURATION").foregroundColor(Color(hex: "64748B"))) {
                         Toggle("Auto-connect on launch", isOn: $autoConnect)
-                            .onChange(of: autoConnect) { val in
+                            .onChange(of: autoConnect) { _, val in
                                 sharedDefaults.set(val, forKey: "setting_auto_connect")
                             }
                         
                         Toggle("Auto-reconnect on disconnect", isOn: $reconnect)
-                            .onChange(of: reconnect) { val in
+                            .onChange(of: reconnect) { _, val in
                                 sharedDefaults.set(val, forKey: "setting_reconnect")
                             }
                         
                         Toggle("Allow Local Network Bypass", isOn: $allowLocal)
-                            .onChange(of: allowLocal) { val in
+                            .onChange(of: allowLocal) { _, val in
                                 sharedDefaults.set(val, forKey: "setting_allow_local")
                             }
                         
                         Toggle("Enable IPv6 Routing", isOn: $ipv6Enabled)
-                            .onChange(of: ipv6Enabled) { val in
+                            .onChange(of: ipv6Enabled) { _, val in
                                 sharedDefaults.set(val, forKey: "setting_ipv6")
                             }
                         
                         Toggle("Kill Switch (Block if VPN fails)", isOn: $killSwitch)
-                            .onChange(of: killSwitch) { val in
+                            .onChange(of: killSwitch) { _, val in
                                 sharedDefaults.set(val, forKey: "setting_kill_switch")
                             }
                         
@@ -62,7 +62,7 @@ struct SettingsView: View {
                                 .keyboardType(.numberPad)
                                 .multilineTextAlignment(.trailing)
                                 .foregroundColor(.white)
-                                .onChange(of: mtuSize) { val in
+                                .onChange(of: mtuSize) { _, val in
                                     if let intVal = Int(val) {
                                         sharedDefaults.set(intVal, forKey: "setting_mtu")
                                     }

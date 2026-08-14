@@ -51,6 +51,7 @@ def create_project():
 		110000010001000100000012 /* Tun2SocksKit in Frameworks */ = {isa = PBXBuildFile; productRef = 330000020002000200000002 /* Tun2SocksKit */; };
 		110000010001000100000013 /* YAMLParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000001 /* YAMLParserTests.swift */; };
 		110000010001000100000014 /* RoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000002 /* RoutingTests.swift */; };
+		110000010001000100000015 /* ProxyHealthTester.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000015 /* ProxyHealthTester.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -78,6 +79,7 @@ def create_project():
 		110000020002000200000005 /* LocalProxyServer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LocalProxyServer.swift; sourceTree = "<group>"; };
 		110000020002000200000006 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
 		110000020002000200000007 /* VPNManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VPNManager.swift; sourceTree = "<group>"; };
+		110000020002000200000015 /* ProxyHealthTester.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProxyHealthTester.swift; sourceTree = "<group>"; };
 		110000020002000200000008 /* ProxyViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProxyViewModel.swift; sourceTree = "<group>"; };
 		110000020002000200000009 /* VPNViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VPNViewModel.swift; sourceTree = "<group>"; };
 		11000002000200020000000A /* MainView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
@@ -212,6 +214,7 @@ def create_project():
 			isa = PBXGroup;
 			children = (
 				11000002000200020007 /* VPNManager.swift */,
+				110000020002000200000015 /* ProxyHealthTester.swift */,
 			);
 			name = VPN;
 			path = VPN;
@@ -357,6 +360,7 @@ def create_project():
 				110000010001000100000005 /* YAMLParser.swift in Sources */,
 				110000010001000100000006 /* KeychainHelper.swift in Sources */,
 				110000010001000100000009 /* VPNManager.swift in Sources */,
+				110000010001000100000015 /* ProxyHealthTester.swift in Sources */,
 				11000001000100010000000A /* ProxyViewModel.swift in Sources */,
 				11000001000100010000000B /* VPNViewModel.swift in Sources */,
 				11000001000100010000000C /* MainView.swift in Sources */,

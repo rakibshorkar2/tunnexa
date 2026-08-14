@@ -8,7 +8,7 @@ struct MainView: View {
     @State private var showImportAlert = false
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 // Background Gradient
                 LinearGradient(
@@ -193,7 +193,7 @@ struct MainView: View {
                     .padding(.bottom, 32)
                 }
             }
-            .navigationBarHidden(true)
+            .toolbar(.hidden, for: .navigationBar)
             .fileImporter(
                 isPresented: $isImporting,
                 allowedContentTypes: [.item],
