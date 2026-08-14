@@ -121,8 +121,8 @@ public struct ProxyConfiguration: Codable {
     /// is neither DIRECT nor BLOCK refers to an existing proxy or group.
     public var unresolvedReferences: [String] {
         var unresolved = Set<String>()
-        for group in groups {
-            for member in group.proxies where member != RouteDirect && member != RouteBlocked {
+        for g in groups {
+            for member in g.proxies where member != RouteDirect && member != RouteBlocked {
                 if proxy(named: member) == nil && group(named: member) == nil {
                     unresolved.insert(member)
                 }
