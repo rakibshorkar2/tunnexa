@@ -37,7 +37,7 @@ public class ProxyViewModel: ObservableObject {
     @Published public var searchText: String = ""
     @Published public var sortOrder: ProxySortOrder = .name
 
-    private let settings = SharedSettings()
+    private var settings = SharedSettings()
     private let maxConcurrentTests = 6
     private var cancelTesting = false
     private let testingQueue = DispatchQueue(label: "com.rakib.tunnexa.proxytest", attributes: .concurrent)
@@ -392,6 +392,8 @@ public class ProxyViewModel: ObservableObject {
                 self.statuses[result.proxyId] = .protocolError
             case .connFailed:
                 self.statuses[result.proxyId] = .connFailed
+            case .slow:
+                self.statuses[result.proxyId] = .slow
             case .checking, .unknown:
                 self.statuses[result.proxyId] = .unknown
             }
