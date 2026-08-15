@@ -1,6 +1,6 @@
 import Foundation
 
-public struct VPNErrorDetails: Identifiable, Codable {
+public struct VPNErrorDetails: Identifiable, Codable, Error {
     public var id: String { "\(domain)_\(code)_\(timestamp.timeIntervalSince1970)" }
     public let timestamp: Date
     public let domain: String
