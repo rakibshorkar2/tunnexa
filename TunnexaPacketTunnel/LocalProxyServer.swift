@@ -1452,7 +1452,8 @@ private final class UDPAssociation {
             return
         }
         let usernameBytes = Array(username.utf8)
-        let passwordBytes = Array(resolvedPassword ?? "".utf8)
+        let password = resolvedPassword ?? ""
+        let passwordBytes = Array(password.utf8)
         guard usernameBytes.count <= 255, passwordBytes.count <= 255 else {
             completion(false)
             return

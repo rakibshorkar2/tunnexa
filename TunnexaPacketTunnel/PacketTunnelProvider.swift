@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import NetworkExtension
+import Tun2SocksKit
 
 // The utun kernel-control constants live in <sys/kern_control.h> and
 // <net/if_utun.h>, which the Swift Darwin module does not expose on iOS.
@@ -158,7 +159,10 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // 4. Engine. Ownership of `tunFd` transfers to the engine.
         let configYAML = buildEngineConfigYAML(mtu: mtu, tunFd: tunFd, isIPv6Enabled: isIPv6Enabled, localPort: localPort)
-        let engine = TunnelEngine(configYAML: configYAML, tunFd: tunFd)
+        let engine = TunnelEngine(configYAML: configYAML, tunFd: tunFd) { config in
+            Socks5Tunnel.run(withConfig: .string(content: config))
+        }
+        engine.onStopRequested = { Socks5Tunnel.quit() }
         engine.onExit = { [weak self] code in
             guard let self = self else { return }
             SharedLogging.log("Tunnel engine exited with code \(code).", category: .tunnel)
@@ -180,6 +184,10 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // 6. Statistics + success.
         let sampler = TunnelStatsSampler(settings: settings)
+        sampler.statsProvider = { () -> (upBytes: Int64, downBytes: Int64)? in
+            let stats = Socks5Tunnel.stats
+            return (upBytes: Int64(stats.up.bytes), downBytes: Int64(stats.down.bytes))
+        }
         sampler.start()
         statsSampler = sampler
 

@@ -1,17 +1,18 @@
 import Foundation
 
-#if canImport(Tun2SocksKit)
-import Tun2SocksKit
-#endif
-
-/// Owns the blocking Tun2SocksKit engine loop and the TUN file descriptor.
+/// Owns the blocking engine loop and the TUN file descriptor.
 ///
 /// Responsibilities:
 ///  - run the engine on a dedicated thread (the loop is injectable for tests);
-///  - stop it cleanly with `Socks5Tunnel.quit()` (never a bare thread teardown);
+///  - stop it cleanly (the stop-request is injectable — the provider wires
+///    `Socks5Tunnel.quit()`, never a bare thread teardown);
 ///  - own the TUN descriptor: close it exactly once, and only after the engine
 ///    thread has exited (or as a `deinit` / stop-timeout safety net);
 ///  - expose running state and the engine exit code under a lock.
+///
+/// This type is compiled into the app target too (so the tests can exercise
+/// it), therefore it must not reference Tun2SocksKit directly — the provider
+/// injects the real engine closures.
 ///
 /// Ownership contract: the descriptor passed in `init` is transferred to the
 /// engine. The caller must not close it (not even when the engine was never
@@ -45,16 +46,12 @@ public final class TunnelEngine {
     /// Called exactly once when the engine loop exits, with its exit code.
     public var onExit: ((Int32) -> Void)?
 
-    #if canImport(Tun2SocksKit)
-    /// Default engine: runs the real Tun2SocksKit loop.
-    public convenience init(configYAML: String, tunFd: Int32) {
-        self.init(configYAML: configYAML, tunFd: tunFd) { config in
-            Socks5Tunnel.run(withConfig: .string(content: config))
-        }
-    }
-    #endif
+    /// Called to request the engine loop to terminate (e.g. wired to
+    /// `Socks5Tunnel.quit()` by the provider). Optional for tests.
+    public var onStopRequested: (() -> Void)?
 
-    /// Designated initializer with an injectable engine loop (used by tests).
+    /// Designated initializer with an injectable engine loop (used by tests
+    /// and by the provider, which wires the real Tun2SocksKit loop here).
     public init(configYAML: String, tunFd: Int32, run: @escaping EngineRun) {
         self.configYAML = configYAML
         self.tunFd = tunFd
@@ -108,9 +105,7 @@ public final class TunnelEngine {
         lock.unlock()
 
         SharedLogging.log("Requesting tunnel engine stop...", category: .tunnel)
-        #if canImport(Tun2SocksKit)
-        Socks5Tunnel.quit()
-        #endif
+        onStopRequested?()
         _ = exitedSemaphore.wait(timeout: .now() + timeout)
 
         if thread.isExecuting {
@@ -152,6 +147,10 @@ public final class TunnelStatsSampler {
     private var lastDownloadBytes: Int64 = 0
     private let lock = NSLock()
 
+    /// Injected engine counter source (up, down) in bytes. The provider wires
+    /// `Socks5Tunnel.stats`; tests may leave it nil (then sampling is a no-op).
+    public var statsProvider: (() -> (upBytes: Int64, downBytes: Int64)?)?
+
     public init(settings: SharedSettings) {
         self.settings = settings
     }
@@ -182,10 +181,9 @@ public final class TunnelStatsSampler {
     }
 
     private func sample() {
-        #if canImport(Tun2SocksKit)
-        let stats = Socks5Tunnel.stats
-        let upBytes = Int64(stats.up.bytes)
-        let downBytes = Int64(stats.down.bytes)
+        guard let stats = statsProvider?() else { return }
+        let upBytes = stats.upBytes
+        let downBytes = stats.downBytes
 
         lock.lock()
         let upDelta = upBytes - lastUploadBytes
@@ -198,6 +196,5 @@ public final class TunnelStatsSampler {
         settings.set(downBytes, forKey: SettingsKey.statDownloadBytes)
         settings.set(max(upDelta, 0), forKey: SettingsKey.statUploadSpeed)
         settings.set(max(downDelta, 0), forKey: SettingsKey.statDownloadSpeed)
-        #endif
     }
 }
