@@ -11,7 +11,7 @@ struct SettingsView: View {
     @State private var mtuText: String = ""
     @State private var mtuIsValid = true
 
-    private var settings = SharedSettings()
+    @State private var settings = SharedSettings()
 
     var body: some View {
         ZStack {
