@@ -38,6 +38,7 @@
 		110000010001000100000026 /* LocalProxyServer.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000005 /* LocalProxyServer.swift */; };
 		110000010001000100000007 /* LocalProxyServer.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000005 /* LocalProxyServer.swift */; };
 		110000010001000100000008 /* PacketTunnelProvider.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000006 /* PacketTunnelProvider.swift */; };
+		11000001000100010000002E /* TunnelEngine.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001F /* TunnelEngine.swift */; };
 		110000010001000100000027 /* TunnelEngine.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001F /* TunnelEngine.swift */; };
 		110000010001000100000028 /* ProxyEndpointResolver.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000020 /* ProxyEndpointResolver.swift */; };
 		110000010001000100000011 /* TunnexaPacketTunnel.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 220000020002000200000001 /* TunnexaPacketTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -50,6 +51,7 @@
 		11000001000100010000002B /* CredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000007 /* CredentialStoreTests.swift */; };
 		11000001000100010000002C /* AutoReconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000008 /* AutoReconnectTests.swift */; };
 		11000001000100010000002D /* LogRedactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000009 /* LogRedactionTests.swift */; };
+		11000001000100010000002F /* TunnelEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44000002000200020000000A /* TunnelEngineTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -109,6 +111,7 @@
 		440000020002000200000007 /* CredentialStoreTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CredentialStoreTests.swift; sourceTree = "<group>"; };
 		440000020002000200000008 /* AutoReconnectTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AutoReconnectTests.swift; sourceTree = "<group>"; };
 		440000020002000200000009 /* LogRedactionTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LogRedactionTests.swift; sourceTree = "<group>"; };
+		44000002000200020000000A /* TunnelEngineTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TunnelEngineTests.swift; sourceTree = "<group>"; };
 		440000020002000200000003 /* TunnexaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TunnexaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -258,6 +261,7 @@
 				440000020002000200000007 /* CredentialStoreTests.swift */,
 				440000020002000200000008 /* AutoReconnectTests.swift */,
 				440000020002000200000009 /* LogRedactionTests.swift */,
+				44000002000200020000000A /* TunnelEngineTests.swift */,
 			);
 			name = TunnexaTests;
 			path = TunnexaTests;
@@ -412,6 +416,7 @@
 				110000010001000100000018 /* ImportConfigSheet.swift in Sources */,
 				110000010001000100000010 /* TunnexaApp.swift in Sources */,
 				110000010001000100000026 /* LocalProxyServer.swift in Sources (App) */,
+				11000001000100010000002E /* TunnelEngine.swift in Sources (App) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -445,6 +450,7 @@
 				11000001000100010000002B /* CredentialStoreTests.swift in Sources */,
 				11000001000100010000002C /* AutoReconnectTests.swift in Sources */,
 				11000001000100010000002D /* LogRedactionTests.swift in Sources */,
+				11000001000100010000002F /* TunnelEngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

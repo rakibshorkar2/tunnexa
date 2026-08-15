@@ -253,7 +253,12 @@ public final class LocalProxyServer {
 
     // MARK: - Lifecycle
 
+    /// Starts the listener and blocks until it is actually `.ready` (or fails
+    /// / times out), so callers can verify the dispatcher is live before
+    /// declaring success. Idempotent: calling `start()` twice is a no-op.
     public func start() throws {
+        guard listener == nil else { return }
+
         let parameters = NWParameters.tcp
         parameters.requiredInterfaceType = .loopback
 
@@ -263,13 +268,18 @@ public final class LocalProxyServer {
         let listener = try NWListener(using: parameters, on: nwPort)
         self.listener = listener
 
+        let readySemaphore = DispatchSemaphore(value: 0)
+        var listenFailure: Error?
         listener.stateUpdateHandler = { [weak self] state in
             guard let self = self else { return }
             switch state {
             case .ready:
                 SharedLogging.log("Local SOCKS5 Dispatcher ready on port \(self.port).", category: .routing)
+                readySemaphore.signal()
             case .failed(let error):
                 SharedLogging.log("Local SOCKS5 Dispatcher failed: \(error.localizedDescription)", category: .routing, level: .error)
+                listenFailure = error
+                readySemaphore.signal()
             case .cancelled:
                 break
             default:
@@ -280,7 +290,18 @@ public final class LocalProxyServer {
             self?.handleNewConnection(connection)
         }
         listener.start(queue: listenerQueue)
+
+        _ = readySemaphore.wait(timeout: .now() + listenerReadyTimeout)
+        guard listener.state == .ready else {
+            listener.cancel()
+            self.listener = nil
+            let detail = listenFailure?.localizedDescription ?? "listener did not become ready on port \(port)"
+            throw NSError(domain: "Tunnexa.Dispatcher", code: 11,
+                          userInfo: [NSLocalizedDescriptionKey: "Local SOCKS5 dispatcher failed to start: \(detail)"])
+        }
     }
+
+    private let listenerReadyTimeout: TimeInterval = 5.0
 
     public func stop() {
         listener?.cancel()

@@ -110,7 +110,7 @@ EXT_FILES = [
     # (id, filename, subgroup, compiled-into-app, compiled-into-extension)
     (file_ref_id(0x05), "LocalProxyServer.swift", None, True, True),
     (file_ref_id(0x06), "PacketTunnelProvider.swift", None, False, True),
-    (file_ref_id(0x1F), "TunnelEngine.swift", None, False, True),
+    (file_ref_id(0x1F), "TunnelEngine.swift", None, True, True),
     (file_ref_id(0x20), "ProxyEndpointResolver.swift", None, False, True),
 ]
 
@@ -123,6 +123,7 @@ TEST_FILES = [
     (test_file_ref_id(0x07), "CredentialStoreTests.swift"),
     (test_file_ref_id(0x08), "AutoReconnectTests.swift"),
     (test_file_ref_id(0x09), "LogRedactionTests.swift"),
+    (test_file_ref_id(0x0A), "TunnelEngineTests.swift"),
 ]
 
 APP_BUILD_SEQ = iter(range(0x01, 0x40))
@@ -163,6 +164,7 @@ APP_BUILD_BY_FILE = {
     file_ref_id(0x1D): app_build_id(0x20),  # TunnelState
     file_ref_id(0x1C): app_build_id(0x22),  # AutoReconnectPolicy
     file_ref_id(0x1E): app_build_id(0x23),  # DiagnosticsRunner
+    file_ref_id(0x1F): app_build_id(0x2E),  # TunnelEngine in App (for tests)
 }
 
 EXT_BUILD_BY_FILE = {
@@ -188,6 +190,7 @@ TEST_BUILD_BY_FILE = {
     test_file_ref_id(0x07): app_build_id(0x2B),
     test_file_ref_id(0x08): app_build_id(0x2C),
     test_file_ref_id(0x09): app_build_id(0x2D),
+    test_file_ref_id(0x0A): app_build_id(0x2F),
 }
 
 # ---------------------------------------------------------------------------
