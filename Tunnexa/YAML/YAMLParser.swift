@@ -114,7 +114,7 @@ public class YAMLParser {
         guard !lines.isEmpty else {
             throw YAMLParsingError.missingProxiesSection
         }
-        let root = try parseBlock(lines, at: 0, indent: lines[0].indent)
+        let root = try parseBlock(lines, at: 0, indent: lines[0].indent).0
         return try validate(root)
     }
 
