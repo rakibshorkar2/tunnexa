@@ -846,6 +846,7 @@ def build_pbxproj():
 \t\t\t\tSWIFT_VERSION = 5.0;
 \t\t\t\tTARGETED_DEVICE_FAMILY = "1,2";
 \t\t\t\tTEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tunnexa.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tunnexa";
+\t\t\t\tBUNDLE_LOADER = "$(TEST_HOST)";
 \t\t\t};
 \t\t\tname = Debug;
 \t\t};
