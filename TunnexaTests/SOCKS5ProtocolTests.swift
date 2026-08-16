@@ -13,35 +13,58 @@ import Network
 /// `NWListener.port` reports raw value 0 until the listener transitions to
 /// `.ready`, so the assigned port must never be captured before readiness —
 /// otherwise clients connect to 127.0.0.1:0 and fail with EADDRNOTAVAIL.
+///
+/// Transient `.failed(posix 22)` states are observed on the iOS simulator
+/// when a loopback listener races the necp socket setup; retry a few times
+/// before giving up.
 func startListenerAndWaitReady(_ listener: NWListener, queue: DispatchQueue) throws -> UInt16 {
-    let ready = DispatchSemaphore(value: 0)
-    var failure: NWError?
-    listener.stateUpdateHandler = { state in
-        switch state {
-        case .ready:
-            ready.signal()
-        case .failed(let error):
-            failure = error
-            ready.signal()
-        default:
-            break
+    var lastFailure: Error?
+    for attempt in 0..<3 {
+        let ready = DispatchSemaphore(value: 0)
+        var failure: NWError?
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                ready.signal()
+            case .failed(let error):
+                failure = error
+                ready.signal()
+            default:
+                break
+            }
         }
+        listener.start(queue: queue)
+        ready.wait()
+        if let failure = failure {
+            lastFailure = failure
+            if attempt < 2 {
+                listener.cancel()
+                Thread.sleep(forTimeInterval: 0.15)
+                continue
+            }
+            throw failure
+        }
+        return listener.port!.rawValue
     }
-    listener.start(queue: queue)
-    ready.wait()
-    if let failure = failure {
-        throw failure
-    }
-    return listener.port!.rawValue
+    throw lastFailure ?? POSIXError(.EINVAL)
 }
 
 /// Picks a free loopback TCP port by binding and releasing a temporary listener.
+/// Never crashes: returns 0 on persistent failure (tests then fail with
+/// assertion errors instead of killing the test process).
 func allocateLoopbackPort() -> UInt16 {
-    let listener = try! NWListener(using: .tcp, on: .any)
-    let queue = DispatchQueue(label: "com.rakib.tunnexa.tests.portalloc")
-    let port = try! startListenerAndWaitReady(listener, queue: queue)
-    listener.cancel()
-    return port
+    for _ in 0..<5 {
+        do {
+            let listener = try NWListener(using: .tcp, on: .any)
+            let queue = DispatchQueue(label: "com.rakib.tunnexa.tests.portalloc")
+            let port = try startListenerAndWaitReady(listener, queue: queue)
+            listener.cancel()
+            return port
+        } catch {
+            Thread.sleep(forTimeInterval: 0.15)
+        }
+    }
+    return 0
 }
 
 /// Minimal echo server on loopback. Returns its port.
@@ -132,8 +155,16 @@ final class SOCKS5ProtocolTests: XCTestCase {
         settings = SharedSettings(suiteName: suiteName)
         dispatcherPort = allocateLoopbackPort()
         dispatcher = LocalProxyServer(port: dispatcherPort, settings: settings)
-        try! dispatcher.start()
-        echoServer = try! LoopbackEchoServer()
+        do {
+            try dispatcher.start()
+        } catch {
+            XCTFail("Dispatcher failed to start: \(error)")
+        }
+        do {
+            echoServer = try LoopbackEchoServer()
+        } catch {
+            XCTFail("Echo server failed to start: \(error)")
+        }
     }
 
     override func tearDown() {
@@ -432,6 +463,19 @@ final class MockSocksServer {
 
     init(behavior: Behavior) {
         self.behavior = behavior
+    }
+
+    /// Starts the mock; on listener failure records a test failure instead of
+    /// crashing the test process (a process crash discards the whole run).
+    func startOrFail(_ testCase: XCTestCase) {
+        do {
+            try start()
+        } catch {
+            testCase.record(XCTIssue(
+                type: .assertionFailure,
+                compactDescription: "MockSocksServer failed to start: \(error)"
+            ))
+        }
     }
 
     func start() throws {

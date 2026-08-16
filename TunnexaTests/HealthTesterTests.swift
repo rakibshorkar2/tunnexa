@@ -12,7 +12,7 @@ final class HealthTesterTests: XCTestCase {
 
     func testOnlineProxyReportsSuccessAndLatency() {
         let mock = MockSocksServer(behavior: .online)
-        try! mock.start()
+        mock.startOrFail(self)
         defer { mock.stop() }
 
         let proxy = SOCKS5Proxy(name: "Mock", host: "127.0.0.1", port: Int(mock.port))
@@ -30,7 +30,7 @@ final class HealthTesterTests: XCTestCase {
 
     func testAuthRequiredProxyAuthenticatesAndSucceeds() {
         let mock = MockSocksServer(behavior: .authRequired)
-        try! mock.start()
+        mock.startOrFail(self)
         defer { mock.stop() }
 
         let proxy = SOCKS5Proxy(name: "Mock", host: "127.0.0.1", port: Int(mock.port), username: "healthuser")
@@ -47,7 +47,7 @@ final class HealthTesterTests: XCTestCase {
 
     func testAuthRejectedProxyReportsAuthFailed() {
         let mock = MockSocksServer(behavior: .authRejected)
-        try! mock.start()
+        mock.startOrFail(self)
         defer { mock.stop() }
 
         let proxy = SOCKS5Proxy(name: "Mock", host: "127.0.0.1", port: Int(mock.port), username: "baduser")
@@ -63,7 +63,7 @@ final class HealthTesterTests: XCTestCase {
 
     func testConnectRejectedProxyReportsConnFailed() {
         let mock = MockSocksServer(behavior: .connectRejected)
-        try! mock.start()
+        mock.startOrFail(self)
         defer { mock.stop() }
 
         let proxy = SOCKS5Proxy(name: "Mock", host: "127.0.0.1", port: Int(mock.port))
@@ -80,7 +80,7 @@ final class HealthTesterTests: XCTestCase {
     func testSilentServerTimesOut() {
         ProxyHealthTester.testTimeout = 1.0
         let mock = MockSocksServer(behavior: .silent)
-        try! mock.start()
+        mock.startOrFail(self)
         defer { mock.stop() }
 
         let proxy = SOCKS5Proxy(name: "Mock", host: "127.0.0.1", port: Int(mock.port))
@@ -111,7 +111,7 @@ final class HealthTesterTests: XCTestCase {
 
     func testCompletionFiresExactlyOnce() {
         let mock = MockSocksServer(behavior: .online)
-        try! mock.start()
+        mock.startOrFail(self)
         defer { mock.stop() }
 
         let proxy = SOCKS5Proxy(name: "Mock", host: "127.0.0.1", port: Int(mock.port))
