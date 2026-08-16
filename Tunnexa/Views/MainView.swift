@@ -297,7 +297,7 @@ struct MainView: View {
                     .padding(.horizontal)
             }
 
-            if SharedSettings().localAuthEnabled {
+            if SharedSettings().bool(SettingsKey.localAuthEnabled) {
                 Text("Local authentication is enabled — guest apps must send the configured username and password (RFC 1929).")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundColor(Color(hex: "F59E0B"))
