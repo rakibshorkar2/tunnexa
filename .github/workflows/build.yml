@@ -120,8 +120,8 @@ jobs:
 
       - name: Validate IPA Packaging
         run: |
-          python3 validate_ipa.py --app build/Tunnexa.xcarchive/Products/Applications/Tunnexa.app
-          python3 validate_ipa.py --ipa build/Tunnexa-unsigned-build-${{ github.run_number }}.ipa
+          python3 validate_ipa.py --app build/Tunnexa.xcarchive/Products/Applications/Tunnexa.app --expect-unsigned
+          python3 validate_ipa.py --ipa build/Tunnexa-unsigned-build-${{ github.run_number }}.ipa --expect-unsigned
 
       - name: Create GitHub Release on Push
         id: create_release
@@ -139,7 +139,23 @@ jobs:
             - **Build Number**: `${{ github.run_number }}`
 
             #### Sideload Instructions
-            This is an unsigned standalone iOS application bundle. You can sideload `Tunnexa-unsigned-build-${{ github.run_number }}.ipa` using TrollStore, AltStore, Sideloadly, or sign it with your Apple Developer certificate.
+            This is an **unsigned** build. Honest capability notes:
+
+            - **Standalone system-wide VPN (Mode A)**: an unsigned bundle **cannot**
+              register the packet-tunnel provider. Sign the IPA with an Apple
+              Developer certificate whose provisioning profile includes the
+              `com.apple.developer.networking.networkextension` (packet-tunnel-provider)
+              and `group.com.rakib.tunnexa` application-groups entitlements, or use a
+              per-version-signing store (e.g. SideStore/AltStore). Without that, the
+              VPN toggle will not appear.
+            - **TrollStore**: can install the unsigned IPA, but system VPN
+              registration is not guaranteed and requires the NetworkExtension
+              entitlement at install time.
+            - **LiveContainer in-app proxy (Mode C)**: install this IPA into
+              LiveContainer; Tunnexa will detect the guest runtime and expose the
+              local SOCKS5 proxy (127.0.0.1:10808) instead of attempting a system VPN.
+            - Device-side behavior is reported by the app itself (Environment /
+              Capabilities in Diagnostics); CI cannot test on a physical iPhone.
           draft: false
           prerelease: false
           make_latest: true

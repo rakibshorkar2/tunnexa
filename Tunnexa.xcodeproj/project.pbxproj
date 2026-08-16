@@ -26,6 +26,7 @@
 		110000010001000100000015 /* ProxyHealthTester.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000015 /* ProxyHealthTester.swift */; };
 		110000010001000100000022 /* AutoReconnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001C /* AutoReconnectPolicy.swift */; };
 		110000010001000100000023 /* DiagnosticsRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001E /* DiagnosticsRunner.swift */; };
+		110000010001000100000030 /* InAppProxyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000023 /* InAppProxyManager.swift */; };
 		11000001000100010000000A /* ProxyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000008 /* ProxyViewModel.swift */; };
 		11000001000100010000000B /* VPNViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000009 /* VPNViewModel.swift */; };
 		11000001000100010000000C /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11000002000200020000000A /* MainView.swift */; };
@@ -41,6 +42,10 @@
 		11000001000100010000002E /* TunnelEngine.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001F /* TunnelEngine.swift */; };
 		110000010001000100000027 /* TunnelEngine.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001F /* TunnelEngine.swift */; };
 		110000010001000100000028 /* ProxyEndpointResolver.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000020 /* ProxyEndpointResolver.swift */; };
+		110000010001000100000031 /* EngineConfigBuilder.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000021 /* EngineConfigBuilder.swift */; };
+		110000010001000100000033 /* EngineConfigBuilder.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000021 /* EngineConfigBuilder.swift */; };
+		110000010001000100000032 /* StartupStateMachine.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000022 /* StartupStateMachine.swift */; };
+		110000010001000100000034 /* StartupStateMachine.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000022 /* StartupStateMachine.swift */; };
 		110000010001000100000011 /* TunnexaPacketTunnel.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 220000020002000200000001 /* TunnexaPacketTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		110000010001000100000012 /* Tun2SocksKit in Frameworks */ = {isa = PBXBuildFile; productRef = 330000020002000200000002 /* Tun2SocksKit */; };
 		110000010001000100000013 /* YAMLParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000001 /* YAMLParserTests.swift */; };
@@ -52,6 +57,9 @@
 		11000001000100010000002C /* AutoReconnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000008 /* AutoReconnectTests.swift */; };
 		11000001000100010000002D /* LogRedactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 440000020002000200000009 /* LogRedactionTests.swift */; };
 		11000001000100010000002F /* TunnelEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44000002000200020000000A /* TunnelEngineTests.swift */; };
+		110000010001000100000035 /* EnvironmentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44000002000200020000000B /* EnvironmentDetectorTests.swift */; };
+		110000010001000100000036 /* EngineConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44000002000200020000000C /* EngineConfigTests.swift */; };
+		110000010001000100000037 /* StartupStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44000002000200020000000D /* StartupStateMachineTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -84,6 +92,7 @@
 		110000020002000200000015 /* ProxyHealthTester.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProxyHealthTester.swift; sourceTree = "<group>"; };
 		11000002000200020000001C /* AutoReconnectPolicy.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AutoReconnectPolicy.swift; sourceTree = "<group>"; };
 		11000002000200020000001E /* DiagnosticsRunner.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DiagnosticsRunner.swift; sourceTree = "<group>"; };
+		110000020002000200000023 /* InAppProxyManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = InAppProxyManager.swift; sourceTree = "<group>"; };
 		110000020002000200000008 /* ProxyViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProxyViewModel.swift; sourceTree = "<group>"; };
 		110000020002000200000009 /* VPNViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VPNViewModel.swift; sourceTree = "<group>"; };
 		11000002000200020000000A /* MainView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
@@ -97,6 +106,8 @@
 		110000020002000200000006 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
 		11000002000200020000001F /* TunnelEngine.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TunnelEngine.swift; sourceTree = "<group>"; };
 		110000020002000200000020 /* ProxyEndpointResolver.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProxyEndpointResolver.swift; sourceTree = "<group>"; };
+		110000020002000200000021 /* EngineConfigBuilder.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EngineConfigBuilder.swift; sourceTree = "<group>"; };
+		110000020002000200000022 /* StartupStateMachine.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = StartupStateMachine.swift; sourceTree = "<group>"; };
 		11000002000200020000000F /* Tunnexa.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Tunnexa.entitlements; sourceTree = "<group>"; };
 		110000020002000200000010 /* TunnexaPacketTunnel.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TunnexaPacketTunnel.entitlements; sourceTree = "<group>"; };
 		110000020002000200000011 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -112,6 +123,9 @@
 		440000020002000200000008 /* AutoReconnectTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AutoReconnectTests.swift; sourceTree = "<group>"; };
 		440000020002000200000009 /* LogRedactionTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LogRedactionTests.swift; sourceTree = "<group>"; };
 		44000002000200020000000A /* TunnelEngineTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TunnelEngineTests.swift; sourceTree = "<group>"; };
+		44000002000200020000000B /* EnvironmentDetectorTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EnvironmentDetectorTests.swift; sourceTree = "<group>"; };
+		44000002000200020000000C /* EngineConfigTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EngineConfigTests.swift; sourceTree = "<group>"; };
+		44000002000200020000000D /* StartupStateMachineTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = StartupStateMachineTests.swift; sourceTree = "<group>"; };
 		440000020002000200000003 /* TunnexaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TunnexaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -231,6 +245,7 @@
 				110000020002000200000015 /* 110000020002000200000015 */,
 				11000002000200020000001C /* 11000002000200020000001C */,
 				11000002000200020000001E /* 11000002000200020000001E */,
+				110000020002000200000023 /* 110000020002000200000023 */,
 			);
 			name = VPN;
 			path = VPN;
@@ -243,6 +258,8 @@
 				110000020002000200000006 /* PacketTunnelProvider.swift */,
 				11000002000200020000001F /* TunnelEngine.swift */,
 				110000020002000200000020 /* ProxyEndpointResolver.swift */,
+				110000020002000200000021 /* EngineConfigBuilder.swift */,
+				110000020002000200000022 /* StartupStateMachine.swift */,
 				110000020002000200000010 /* TunnexaPacketTunnel.entitlements */,
 				110000020002000200000012 /* Info.plist */,
 			);
@@ -262,6 +279,9 @@
 				440000020002000200000008 /* AutoReconnectTests.swift */,
 				440000020002000200000009 /* LogRedactionTests.swift */,
 				44000002000200020000000A /* TunnelEngineTests.swift */,
+				44000002000200020000000B /* EnvironmentDetectorTests.swift */,
+				44000002000200020000000C /* EngineConfigTests.swift */,
+				44000002000200020000000D /* StartupStateMachineTests.swift */,
 			);
 			name = TunnexaTests;
 			path = TunnexaTests;
@@ -406,6 +426,7 @@
 				110000010001000100000015 /* ProxyHealthTester.swift in Sources */,
 				110000010001000100000022 /* AutoReconnectPolicy.swift in Sources */,
 				110000010001000100000023 /* DiagnosticsRunner.swift in Sources */,
+				110000010001000100000030 /* InAppProxyManager.swift in Sources */,
 				11000001000100010000000A /* ProxyViewModel.swift in Sources */,
 				11000001000100010000000B /* VPNViewModel.swift in Sources */,
 				11000001000100010000000C /* MainView.swift in Sources */,
@@ -417,6 +438,8 @@
 				110000010001000100000010 /* TunnexaApp.swift in Sources */,
 				110000010001000100000026 /* LocalProxyServer.swift in Sources (App) */,
 				11000001000100010000002E /* TunnelEngine.swift in Sources (App) */,
+				110000010001000100000031 /* EngineConfigBuilder.swift in Sources (App) */,
+				110000010001000100000032 /* StartupStateMachine.swift in Sources (App) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -435,6 +458,8 @@
 				110000010001000100000008 /* PacketTunnelProvider.swift in Sources (Extension) */,
 				110000010001000100000027 /* TunnelEngine.swift in Sources (Extension) */,
 				110000010001000100000028 /* ProxyEndpointResolver.swift in Sources (Extension) */,
+				110000010001000100000033 /* EngineConfigBuilder.swift in Sources (Extension) */,
+				110000010001000100000034 /* StartupStateMachine.swift in Sources (Extension) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -451,6 +476,9 @@
 				11000001000100010000002C /* AutoReconnectTests.swift in Sources */,
 				11000001000100010000002D /* LogRedactionTests.swift in Sources */,
 				11000001000100010000002F /* TunnelEngineTests.swift in Sources */,
+				110000010001000100000035 /* EnvironmentDetectorTests.swift in Sources */,
+				110000010001000100000036 /* EngineConfigTests.swift in Sources */,
+				110000010001000100000037 /* StartupStateMachineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

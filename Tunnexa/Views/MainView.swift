@@ -4,9 +4,13 @@ import NetworkExtension
 struct MainView: View {
     @EnvironmentObject var proxyViewModel: ProxyViewModel
     @StateObject var vpnViewModel = VPNViewModel()
+    @ObservedObject private var inAppProxy = InAppProxyManager.shared
     @State private var isImporting = false
     @State private var showImportAlert = false
-    
+
+    private let environment = VPNEnvironmentDetector.detectEnvironment()
+    private let capabilities = VPNEnvironmentDetector.currentCapabilities()
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -27,7 +31,7 @@ struct MainView: View {
                                 Text("Tunnexa")
                                     .font(.system(size: 32, weight: .bold, design: .rounded))
                                     .foregroundColor(.white)
-                                Text("System-wide SOCKS5 VPN")
+                                Text(subtitle)
                                     .font(.system(size: 14, weight: .medium, design: .rounded))
                                     .foregroundColor(Color(hex: "94A3B8"))
                             }
@@ -48,69 +52,13 @@ struct MainView: View {
                         .padding(.horizontal)
                         .padding(.top, 16)
                         
-                        // Status Card (Connected / Disconnected)
-                        VStack(spacing: 6) {
-                            Text(vpnViewModel.state == .connected ? "CONNECTED" : (vpnViewModel.state.isActive ? statusLabel.uppercased() : "DISCONNECTED"))
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .tracking(2.0)
-                                .foregroundColor(statusColor)
-
-                            if vpnViewModel.state.isConnected {
-                                Text(vpnViewModel.sessionDuration)
-                                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
+                        if capabilities.canUsePacketTunnel {
+                            systemVPNContent
+                        } else if capabilities.canUseInAppProxy {
+                            inAppProxyContent
+                        } else {
+                            unsupportedEnvironmentContent
                         }
-                        
-                        // Glowing Connect Button
-                        Button(action: {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
-                                vpnViewModel.toggleConnection()
-                            }
-                        }) {
-                            ZStack {
-                                // Outer Glow Ring
-                                Circle()
-                                    .stroke(statusColor.opacity(0.3), lineWidth: 10)
-                                    .frame(width: 190, height: 190)
-                                    .scaleEffect(vpnViewModel.state.isConnected ? 1.05 : 1.0)
-                                    .blur(radius: vpnViewModel.state.isConnected ? 4 : 0)
-                                    .animation(vpnViewModel.state.isConnected ? .easeInOut(duration: 1.5).repeatForever(autoreverses: true) : .default, value: vpnViewModel.state.isConnected)
-                                
-                                // Inner Ring
-                                Circle()
-                                    .stroke(statusColor, lineWidth: 4)
-                                    .frame(width: 165, height: 165)
-                                
-                                // Button Body
-                                Circle()
-                                    .fill(LinearGradient(
-                                        gradient: Gradient(colors: [Color(hex: "1E293B"), Color(hex: "0F172A")]),
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ))
-                                    .frame(width: 150, height: 150)
-                                    .shadow(color: statusColor.opacity(0.4), radius: vpnViewModel.state.isConnected ? 20 : 5)
-                                
-                                // Icon / Label
-                                VStack(spacing: 8) {
-                                    Image(systemName: "power")
-                                        .font(.system(size: 44, weight: .bold))
-                                        .foregroundColor(statusColor)
-                                    if vpnViewModel.isBusy {
-                                        ProgressView()
-                                            .tint(.white)
-                                            .padding(.top, 2)
-                                    } else {
-                                        Text(vpnViewModel.state.isConnected ? "DISCONNECT" : "CONNECT")
-                                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                                            .foregroundColor(.white.opacity(0.9))
-                                    }
-                                }
-                            }
-                        }
-                        .disabled(vpnViewModel.state.isActive)
-                        .padding(.vertical, 16)
                         
                         // Latency & Speeds Grid
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
@@ -205,7 +153,7 @@ struct MainView: View {
                     .environmentObject(proxyViewModel)
             }
             .alert(
-                vpnViewModel.activeError?.environment == .liveContainer ? "Unsupported Environment" : "VPN Connection Alert",
+                vpnViewModel.activeError?.environment.isSupportedForSystemVPN == false ? "Unsupported Environment" : "VPN Connection Alert",
                 isPresented: Binding(
                     get: { vpnViewModel.activeError != nil },
                     set: { if !$0 { vpnViewModel.activeError = nil } }
@@ -218,6 +166,172 @@ struct MainView: View {
         }
     }
     
+    // MARK: - Environment Mode Content
+    
+    private var subtitle: String {
+        if capabilities.canUsePacketTunnel {
+            return "System-wide SOCKS5 VPN"
+        }
+        if capabilities.canUseInAppProxy {
+            return "In-App SOCKS5 Proxy"
+        }
+        return "Unsupported Environment"
+    }
+
+    /// Mode A: the real system-wide packet tunnel.
+    private var systemVPNContent: some View {
+        VStack(spacing: 28) {
+            // Status Card (Connected / Disconnected)
+            VStack(spacing: 6) {
+                Text(vpnViewModel.state == .connected ? "CONNECTED" : (vpnViewModel.state.isActive ? statusLabel.uppercased() : "DISCONNECTED"))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .tracking(2.0)
+                    .foregroundColor(statusColor)
+
+                if vpnViewModel.state.isConnected {
+                    Text(vpnViewModel.sessionDuration)
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.8))
+                }
+            }
+            
+            // Glowing Connect Button
+            Button(action: {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+                    vpnViewModel.toggleConnection()
+                }
+            }) {
+                ZStack {
+                    // Outer Glow Ring
+                    Circle()
+                        .stroke(statusColor.opacity(0.3), lineWidth: 10)
+                        .frame(width: 190, height: 190)
+                        .scaleEffect(vpnViewModel.state.isConnected ? 1.05 : 1.0)
+                        .blur(radius: vpnViewModel.state.isConnected ? 4 : 0)
+                        .animation(vpnViewModel.state.isConnected ? .easeInOut(duration: 1.5).repeatForever(autoreverses: true) : .default, value: vpnViewModel.state.isConnected)
+                    
+                    // Inner Ring
+                    Circle()
+                        .stroke(statusColor, lineWidth: 4)
+                        .frame(width: 165, height: 165)
+                    
+                    // Button Body
+                    Circle()
+                        .fill(LinearGradient(
+                            gradient: Gradient(colors: [Color(hex: "1E293B"), Color(hex: "0F172A")]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ))
+                        .frame(width: 150, height: 150)
+                        .shadow(color: statusColor.opacity(0.4), radius: vpnViewModel.state.isConnected ? 20 : 5)
+                    
+                    // Icon / Label
+                    VStack(spacing: 8) {
+                        Image(systemName: "power")
+                            .font(.system(size: 44, weight: .bold))
+                            .foregroundColor(statusColor)
+                        if vpnViewModel.isBusy {
+                            ProgressView()
+                                .tint(.white)
+                                .padding(.top, 2)
+                        } else {
+                            Text(vpnViewModel.state.isConnected ? "DISCONNECT" : "CONNECT")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.9))
+                        }
+                    }
+                }
+            }
+            .disabled(vpnViewModel.state.isActive)
+            .padding(.vertical, 16)
+        }
+    }
+
+    /// Mode C: honest in-app loopback proxy (LiveContainer guest, simulator).
+    /// Never presents this as a system VPN and never touches the VPN profile.
+    private var inAppProxyContent: some View {
+        VStack(spacing: 20) {
+            // Status Card
+            VStack(spacing: 6) {
+                Text(inAppProxy.isRunning ? "PROXY RUNNING" : "PROXY STOPPED")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .tracking(2.0)
+                    .foregroundColor(inAppProxy.isRunning ? Color(hex: "10B981") : Color(hex: "64748B"))
+
+                Text("127.0.0.1:\(AppConfigConstants.localProxyPort)")
+                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+
+            // Start / Stop
+            Button(action: {
+                if inAppProxy.isRunning {
+                    inAppProxy.stop()
+                } else {
+                    inAppProxy.start()
+                }
+            }) {
+                Text(inAppProxy.isRunning ? "STOP PROXY" : "START PROXY")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        LinearGradient(
+                            gradient: Gradient(colors: inAppProxy.isRunning
+                                ? [Color(hex: "B91C1C"), Color(hex: "991B1B")]
+                                : [Color(hex: "6366F1"), Color(hex: "4F46E5")]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .cornerRadius(16)
+            }
+            .padding(.horizontal, 24)
+
+            if let error = inAppProxy.lastError {
+                Text(error)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundColor(Color(hex: "F87171"))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
+            if SharedSettings().localAuthEnabled {
+                Text("Local authentication is enabled — guest apps must send the configured username and password (RFC 1929).")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundColor(Color(hex: "F59E0B"))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
+            Text("This is a LOCAL proxy, not a system VPN. Configure guest applications to use SOCKS5 at 127.0.0.1:\(AppConfigConstants.localProxyPort). Only traffic from those applications is proxied — the rest of the system is unaffected.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundColor(Color(hex: "94A3B8"))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .padding(.vertical, 16)
+    }
+
+    /// Runtimes that support neither mode: honest refusal, no controls.
+    private var unsupportedEnvironmentContent: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36))
+                .foregroundColor(Color(hex: "F59E0B"))
+            Text("Unsupported Environment")
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+            Text("Tunnexa could not positively identify this installation as a standalone app, a LiveContainer guest, or the simulator. It will not attempt to start a VPN in an ambiguous runtime. Reinstall Tunnexa as a standalone app and try again.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundColor(Color(hex: "94A3B8"))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .padding(.vertical, 24)
+    }
+
     // MARK: - Computed Properties
     
     private var statusColor: Color {

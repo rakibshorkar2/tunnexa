@@ -8,6 +8,7 @@ import Foundation
 public struct DiagnosticsBundle {
     public let generatedAt: Date
     public let environment: VPNRuntimeEnvironment
+    public let capabilities: EnvironmentCapabilities
     public let tunnelState: TunnelState
     public let proxyCount: Int
     public let groupCount: Int
@@ -23,6 +24,9 @@ public struct DiagnosticsBundle {
         lines.append("Tunnexa Diagnostics")
         lines.append("Generated: \(generatedAt)")
         lines.append("Environment: \(environment.rawValue)")
+        lines.append("System-wide VPN: \(capabilities.canUsePacketTunnel ? "Available" : "Not available")")
+        lines.append("In-app proxy: \(capabilities.canUseInAppProxy ? "Available" : "Not available")")
+        lines.append("Shared app group: \(capabilities.canUseSharedAppGroup ? "Available" : "Not available")")
         lines.append("Tunnel state: \(tunnelState.displayName)")
         lines.append("Proxies: \(proxyCount)  Groups: \(groupCount)  Rules: \(ruleCount)")
         lines.append("Selected proxy: \(selectedProxy.isEmpty ? "-" : selectedProxy)")
@@ -53,8 +57,18 @@ public enum DiagnosticsRunner {
     ) -> DiagnosticsBundle {
         let config = settings.loadConfiguration()
         let unresolved = config?.unresolvedReferences ?? []
+        let capabilities = VPNEnvironmentDetector.capabilities(for: environment)
 
         var issues: [String] = []
+        if environment == .liveContainer {
+            issues.append("LiveContainer guest runtime: system-wide VPN is unavailable; use the in-app proxy mode.")
+        }
+        if environment == .simulator {
+            issues.append("Simulator runtime: system-wide VPN is unavailable; use the in-app proxy mode for testing.")
+        }
+        if environment == .unknown || environment == .unsupported {
+            issues.append("Unrecognized runtime: Tunnexa will not attempt to start a system VPN.")
+        }
         if let config = config {
             if !config.hasUsableSelection {
                 issues.append("Configuration contains no usable proxies or groups.")
@@ -74,6 +88,9 @@ public enum DiagnosticsRunner {
         if tunnelState == .invalid {
             issues.append("VPN profile is invalid (wrong extension bundle id).")
         }
+        if capabilities.canUseInAppProxy, settings.inAppProxyEnabled {
+            issues.append("In-app proxy mode is enabled.")
+        }
 
         var settingsSummary: [String: String] = [:]
         settingsSummary["Auto-connect"] = settings.autoConnect ? "on" : "off"
@@ -83,10 +100,12 @@ public enum DiagnosticsRunner {
         settingsSummary["IPv6"] = settings.ipv6Enabled ? "on" : "off"
         settingsSummary["MTU"] = settings.mtu.map { "\($0)" } ?? "default (\(MTULimit.defaultValue))"
         settingsSummary["Local auth"] = settings.bool(SettingsKey.localAuthEnabled) ? "on" : "off"
+        settingsSummary["In-app proxy"] = settings.inAppProxyEnabled ? "on" : "off"
 
         return DiagnosticsBundle(
             generatedAt: Date(),
             environment: environment,
+            capabilities: capabilities,
             tunnelState: tunnelState,
             proxyCount: config?.proxies.count ?? 0,
             groupCount: config?.groups.count ?? 0,

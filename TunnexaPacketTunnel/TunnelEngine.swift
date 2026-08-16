@@ -1,34 +1,32 @@
 import Foundation
 
-/// Owns the blocking engine loop and the TUN file descriptor.
+/// Owns the blocking engine loop.
 ///
 /// Responsibilities:
 ///  - run the engine on a dedicated thread (the loop is injectable for tests);
 ///  - stop it cleanly (the stop-request is injectable — the provider wires
 ///    `Socks5Tunnel.quit()`, never a bare thread teardown);
-///  - own the TUN descriptor: close it exactly once, and only after the engine
-///    thread has exited (or as a `deinit` / stop-timeout safety net);
 ///  - expose running state and the engine exit code under a lock.
 ///
 /// This type is compiled into the app target too (so the tests can exercise
 /// it), therefore it must not reference Tun2SocksKit directly — the provider
 /// injects the real engine closures.
 ///
-/// Ownership contract: the descriptor passed in `init` is transferred to the
-/// engine. The caller must not close it (not even when the engine was never
-/// started — `deinit` covers that), and the provider must stop using the
-/// packet flow socket afterwards.
+/// Descriptor contract: the TUN descriptor used by the engine belongs to
+/// `NEPacketTunnelFlow`. Tun2SocksKit's `Socks5Tunnel.run(withConfig:)`
+/// discovers that descriptor itself, and the C engine never closes an
+/// externally supplied descriptor. This type (and the provider) therefore
+/// never opens, receives or closes a descriptor — doing so would tear down
+/// the packet flow while the tunnel is running.
 public final class TunnelEngine {
 
     public typealias EngineRun = (String) -> Int32
 
     private let configYAML: String
-    private let tunFd: Int32
     private let run: EngineRun
     private let lock = NSLock()
     private let exitedSemaphore = DispatchSemaphore(value: 0)
     private var workerThread: Thread?
-    private var fdClosed = false
     private var storedExitCode: Int32?
     private var storedIsRunning = false
 
@@ -52,15 +50,9 @@ public final class TunnelEngine {
 
     /// Designated initializer with an injectable engine loop (used by tests
     /// and by the provider, which wires the real Tun2SocksKit loop here).
-    public init(configYAML: String, tunFd: Int32, run: @escaping EngineRun) {
+    public init(configYAML: String, run: @escaping EngineRun) {
         self.configYAML = configYAML
-        self.tunFd = tunFd
         self.run = run
-    }
-
-    deinit {
-        // Safety net: never leak the TUN descriptor.
-        closeFileDescriptor()
     }
 
     public func start() {
@@ -81,7 +73,6 @@ public final class TunnelEngine {
             self.storedExitCode = exitCode
             self.lock.unlock()
             self.exitedSemaphore.signal()
-            self.closeFileDescriptor()
             self.onExit?(exitCode)
         }
         thread.name = "Tunnexa.TunnelEngine"
@@ -93,13 +84,14 @@ public final class TunnelEngine {
 
     /// Requests the engine to stop and waits for the loop to exit.
     ///
-    /// The TUN descriptor is closed exactly once: here when the loop exits, or
-    /// as a last resort after `timeout` if the loop refuses to terminate.
+    /// If the loop refuses to terminate within `timeout`, the request is
+    /// repeated on the engine thread via `Thread.cancel()` as a best-effort
+    /// (blocking C calls cannot be interrupted; the extension is being torn
+    /// down by the system at that point anyway).
     public func stop(timeout: TimeInterval = 5.0) {
         lock.lock()
         guard let thread = workerThread else {
             lock.unlock()
-            closeFileDescriptor()
             return
         }
         lock.unlock()
@@ -109,27 +101,13 @@ public final class TunnelEngine {
         _ = exitedSemaphore.wait(timeout: .now() + timeout)
 
         if thread.isExecuting {
-            SharedLogging.log("Tunnel engine did not exit in time; closing descriptor and signalling thread cancellation.", category: .tunnel, level: .warning)
-            closeFileDescriptor()
+            SharedLogging.log("Tunnel engine did not exit in time; signalling thread cancellation.", category: .tunnel, level: .warning)
             thread.cancel()
         }
         lock.lock()
         workerThread = nil
         lock.unlock()
         SharedLogging.log("Tunnel engine stopped.", category: .tunnel)
-    }
-
-    /// Closes the TUN descriptor unless it was already closed. Idempotent and
-    /// safe to call from any thread (engine thread, stop(), deinit).
-    private func closeFileDescriptor() {
-        lock.lock()
-        guard !fdClosed else {
-            lock.unlock()
-            return
-        }
-        fdClosed = true
-        lock.unlock()
-        close(tunFd)
     }
 }
 

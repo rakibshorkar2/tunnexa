@@ -1,8 +1,44 @@
 # Tunnexa — Hardening & Regression Report
 
 **Project:** Tunnexa — system-wide SOCKS5 VPN for iOS
-**Status:** All 14 hardening phases implemented. Swift sources and tests finalized; **tests authored but not executed locally** (see Execution Note).
-**Date:** 2026-08-14
+**Status:** Hardening phases implemented. Swift sources and tests finalized; **tests authored but not executed locally** (see Execution Note). Requires CI + physical-device verification.
+**Date:** 2026-08-16 (updated)
+
+---
+
+## 0. Engine Contract Correction (2026-08-16)
+
+A second engineering pass re-verified the engine contract against the actual
+vendored binaries (hev-socks5-tunnel 2.17.1 sources + Tun2SocksKit 5.16.0
+shim, tag `dc6d73f`) instead of assuming the old repo's ioctl/KVC machinery
+was load-bearing. Findings and fixes:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | `Socks5Tunnel.run(withConfig:)` accepts **no caller fd**; it scans fds 0…1024 via `getpeername` for the `com.apple.net.utun_control` socket owned by `packetFlow`, and hands it to `hev_socks5_tunnel_main`. With an external fd the C engine only sets `FIONBIO` and **never closes it** (`tun_fd_local` path). | Removed all `TunnelFileDescriptor` ioctl/KVC dead weight; engine takes no fd; engine never closes descriptors (asserted in tests). |
+| 2 | Config has **no `tunnel.fd` key**; with an external fd only `tunnel.mtu` matters (lwIP read-buffer sizing). | New `EngineConfigBuilder` emits `tunnel: { mtu }` only; no `name`/`ipv4`/`ipv6` keys. |
+| 3 | Old `udp: udp` selected hev UDP-in-UDP (raw datagrams to 127.0.0.1:10808), which the dispatcher does not implement. | `udp:` key removed → engine uses SOCKS5 UDP-ASSOCIATE, which the dispatcher implements end-to-end. |
+| 4 | Engine silently raises `task-stack-size` to `20480 + max(tcp-buffer-size, 1500*udp-copy-buffer-nums)`; old `task-stack-size: 20480` was a silent no-op. | Tuning defaults: tcp-buffer-size 16384, udp-copy-buffer-nums 2, max-session-count 256, connect-timeout 5000, read-write-timeout 60000; `effectiveTaskStackSize` computed + asserted in tests. |
+| 5 | Old `startupState` instance property: iOS reuses the `NEPacketTunnelProvider` instance across sessions, so a stale `.succeeded`/`.failed` persisted and every later session hung in `.connecting`. | New `StartupStateMachine`: per-session `begin`/`settle`/`cancel`, exactly-once handler; `stopTunnel` uses `cancel()` (dropped handlers are never invoked — established system behavior). |
+| 6 | `mapdns` with an external fd works over the tunnel (100.64.0.0/10). | Kept: `mapdns: 198.18.0.2:53 → 100.64.0.0/10`, cache 10000. |
+
+### Runtime environment handling (honest mode mapping)
+- `VPNEnvironmentDetector` rewritten: detects `.standalone` / `.liveContainer`
+  (env vars `LC_APP_ID`, `LIVE_CONTAINER`, `LIVECONTAINER`, `LC_BUNDLE_ID`,
+  path signatures `/livecontainer/`, `/data/app/`, `com.kdt.livecontainer`,
+  bundle-id) / `.simulator` (compile-time, injectable for tests) / `.unknown` /
+  `.unsupported`.
+- `EnvironmentCapabilities` maps: standalone → packet-tunnel + shared app group;
+  liveContainer → in-app proxy only; simulator → in-app proxy + app group;
+  unknown/unsupported → none.
+- `isSupportedForSystemVPN` is true **only** for `.standalone` (fail-safe).
+  `VPNManager` refuses to create/save NE profiles otherwise, with
+  `environmentUnsupportedError` messages in `VPNErrorDetails`.
+- Mode C: `InAppProxyManager` runs the local dispatcher (127.0.0.1:10808) as an
+  in-app proxy in LiveContainer/simulator — **never** presented as a system VPN.
+- `TunnexaApp`/`MainView` switch UI and launch wiring by capabilities.
+- `DiagnosticsRunner` reports environment + capabilities + in-app proxy state
+  and environment-specific issues.
 
 ---
 
@@ -14,8 +50,9 @@ This project was hardened on a **Windows host with no Xcode toolchain**. Consequ
 - **No unit tests were compiled or executed locally.**
 - The only executable validation performed locally was Python-based:
   - `generate_project.py` — pbxproj regeneration, reference integrity (`[ OK ] All pbxproj object references resolve.`), and determinism (`[ OK ] Generator is deterministic.`).
-  - `validate_ipa.py` — syntax/smoke check.
+  - `validate_ipa.py` — syntax/smoke check (`py_compile`), structural validation (no IPA available locally).
 - **The execution venue for the Swift test suite is the GitHub Actions workflow** (`.github/workflows/build.yml`), which now runs `xcodebuild test` on an iOS Simulator on every push. The first green CI run is the authoritative verification of the suite.
+- **Physical-device verification (iPhone 15 Pro) is out of scope for this host**: no Xcode, no device connection. All device-dependent claims below are marked as CI/device-untested.
 
 ---
 
@@ -72,6 +109,10 @@ This project was hardened on a **Windows host with no Xcode toolchain**. Consequ
 | `AutoReconnectTests.swift` (new) | ladder values, clamping, retry cap, monotonicity |
 | `LogRedactionTests.swift` (new) | `=`/`:` forms, JSON, single quotes, URL userinfo, auth_token/client_secret, idempotence, log-file leak test, `VPNErrorDetails` redaction |
 | `VPNManagerTests.swift` | unchanged (environment detection, error details, provider bundle id) |
+| `EnvironmentDetectorTests.swift` (new) | LC env-var/path/bundle-id detection, standalone vs unknown, signature precedence, simulator flag, support gating, capability mapping |
+| `EngineConfigTests.swift` (new) | no `fd:`/`udp:`/`name`/`ipv4`/`ipv6` keys, dispatcher endpoint, MTU clamping, mapdns, tuning floor (`36864`), custom tuning, IPv6-flag neutrality |
+| `StartupStateMachineTests.swift` (new) | exactly-once settle, reset per session (the reused-provider regression), cancel-never-invokes, begin-after-cancel |
+| `TunnelEngineTests.swift` (rewritten) | fd-free engine: descriptors survive run/stop/deinit, run-once, exit-code delivery, `onStopRequested` |
 
 ### Phase 13 — CI / Packaging
 - `.github/workflows/build.yml`: generator determinism check, SPM dependency cache, **unit test job on iOS Simulator** (dynamic device selection), IPA/app validation step.
@@ -97,5 +138,24 @@ This project was hardened on a **Windows host with no Xcode toolchain**. Consequ
 ## 4. Known Limitations / Next Steps
 
 1. **Execute the suite in CI** (push → GitHub Actions) and fix any compile/assert failures surfaced by the simulator runs. This is the single most important next step.
-2. Optional: add `UDPAssociation` protocol test (datagram relay through a loopback UDP echo server) — infrastructure already exists in `SOCKS5ProtocolTests`.
-3. Optional: on-device verification of profile save / kill switch behaviour on a standalone install (TrollStore or signed), which no test can cover.
+2. **Physical-device verification is impossible from this host** (Windows, no Xcode, no iPhone 15 Pro attached). Standalone system-VPN behavior (profile save, `.connecting → .connected`, kill switch) and LiveContainer in-app proxy mode **must** be verified on the device; CI can only cover build + simulator unit tests.
+3. The CI runner must be a macOS image that actually offers Xcode 26.6 (`macos-26`); older images may not have it.
+4. Optional: add `UDPAssociation` protocol test (datagram relay through a loopback UDP echo server) — infrastructure already exists in `SOCKS5ProtocolTests`.
+5. Optional: engine integration test on-device only (Tun2SocksKit is a binary framework; it cannot be exercised by unit tests without a device/simulator process with the extension context).
+
+---
+
+## 5. New/Changed Files (2026-08-16 pass)
+
+- `TunnexaPacketTunnel/EngineConfigBuilder.swift` — NEW: pure engine-YAML builder (mtu-only tunnel, no `udp:`/`fd:` keys, mapdns, tuning with enforced stack floor).
+- `TunnexaPacketTunnel/StartupStateMachine.swift` — NEW: per-session startup coordination.
+- `TunnexaPacketTunnel/PacketTunnelProvider.swift` — rewritten: fd-less engine, per-session startup, config guards, network-settings setup, local-dispatcher probe (real SOCKS5 greeting/auth/CONNECT), stats sampler, honest failure codes.
+- `TunnexaPacketTunnel/TunnelEngine.swift` — rewritten: no fd ownership/close; injectable `onExit`/`onStopRequested`; `stop(timeout:)` best-effort.
+- `Shared/VPNEnvironmentDetector.swift` — rewritten: `.simulator`/`.unsupported` cases, `EnvironmentCapabilities`, injectable detection, fail-safe support gating.
+- `Shared/VPNErrorDetails.swift`, `Shared/SharedSettings.swift` — environment dialogs; `inAppProxyEnabled` key.
+- `Tunnexa/VPN/InAppProxyManager.swift` — NEW: in-app dispatcher manager (Mode C).
+- `Tunnexa/VPN/VPNManager.swift`, `Tunnexa/App/TunnexaApp.swift`, `Tunnexa/Views/MainView.swift`, `Tunnexa/VPN/DiagnosticsRunner.swift` — mode-aware wiring/UI/diagnostics.
+- Tests: `EnvironmentDetectorTests.swift`, `EngineConfigTests.swift`, `StartupStateMachineTests.swift` (NEW), `TunnelEngineTests.swift` (rewritten: descriptor-preservation contract).
+- `generate_project.py` — registers all new files (app + extension + tests); determinism + reference checks pass locally.
+- `validate_ipa.py` — real `codesign --verify`/`-dv`/entitlement dumps, `security cms -D` profile decoding, `otool` Mach-O checks (macOS-only, skipped with notice elsewhere), honest unsigned verdict + `--expect-unsigned`.
+- `.github/workflows/build.yml` — validation uses `--expect-unsigned`; release notes state honest capability limits (unsigned ⇒ no system VPN registration; LiveContainer in-app mode works).

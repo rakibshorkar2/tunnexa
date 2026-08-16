@@ -89,7 +89,20 @@ LiveContainer runs guest apps inside its own sandbox and process space. Guest ap
 
 **No source code change in Tunnexa can overcome this iOS platform-level restriction.**
 
+Tunnexa therefore **detects the LiveContainer guest runtime** at launch (environment variables `LC_APP_ID` / `LIVE_CONTAINER` / `LIVECONTAINER` / `LC_BUNDLE_ID`, path signatures `/livecontainer/` / `/data/app/` / `com.kdt.livecontainer`) and switches to **in-app proxy mode**: the same local SOCKS5 dispatcher listens on `127.0.0.1:10808` inside the app process. Clients inside the container can point their SOCKS5 settings at it. Tunnexa never claims a system VPN in this mode, and the VPN toggle is not offered.
+
 ---
+
+## Deployment Modes (Runtime-Detected)
+
+| Mode | Detected when | System VPN | In-app proxy (127.0.0.1:10808) | Shared app group |
+|---|---|---|---|---|
+| Standalone | Installed/signed normally, no LC signatures | ✅ | – | ✅ |
+| LiveContainer | LC env vars or path signatures | ❌ | ✅ | ❌ |
+| Simulator | Compile-time `targetEnvironment(simulator)` | ❌ | ✅ | ✅ |
+| Unknown / unsupported | Anything else (fail-safe) | ❌ | ❌ | ❌ |
+
+`VPNEnvironmentDetector` maps these to `EnvironmentCapabilities`; `VPNManager` refuses to create or save NE profiles unless the environment is `.standalone` (`isSupportedForSystemVPN`). The Diagnostics panel shows the detected environment and capabilities.
 
 ## Required Actions for Standalone Deployment
 
@@ -98,9 +111,14 @@ LiveContainer runs guest apps inside its own sandbox and process space. Guest ap
 1. Build the IPA using the CI/CD workflow (macos-26, Xcode 26.6).
 2. Download the unsigned IPA from GitHub Releases.
 3. Open TrollStore on device → Install App → select the IPA.
-4. TrollStore will install with permanent code signature that satisfies the NetworkExtension entitlement.
+4. TrollStore installs with its permanent ad-hoc signature.
 5. On first launch, iOS will prompt to allow VPN configuration. **Tap Allow.**
 6. The VPN profile is saved. VPN tunnel can now start.
+
+> Note: the NetworkExtension entitlement must be present in the installed
+> signature for the VPN prompt to appear. This works with TrollStore on
+> supported iOS versions, but should be verified on the actual device — CI
+> cannot test it.
 
 ### Option B: Apple Developer Certificate (Full Provisioning)
 
@@ -119,20 +137,29 @@ LiveContainer runs guest apps inside its own sandbox and process space. Guest ap
 A validation script is provided to verify IPA packaging correctness before sideloading:
 
 ```bash
-python3 validate_ipa.py --ipa Tunnexa-unsigned-build-N.ipa
+python3 validate_ipa.py --ipa Tunnexa-unsigned-build-N.ipa --expect-unsigned
 ```
 
 The script checks:
 - Main app bundle identifier = `com.rakib.tunnexa`
-- Main app executable is present
+- Main app executable is present and a Mach-O binary
 - Extension is embedded in `PlugIns/TunnexaPacketTunnel.appex`
 - Extension bundle identifier = `com.rakib.tunnexa.PacketTunnel`
 - `CFBundlePackageType = XPC!`
 - `NSExtensionPointIdentifier = com.apple.networkextension.packet-tunnel`
 - `NSExtensionPrincipalClass` is set to `PacketTunnelProvider`
-- Extension executable is present
-- Signing state detected and reported (signed bundles must carry `_CodeSignature` + `embedded.mobileprovision`)
+- Extension executable is present and a Mach-O binary
+- Signing state detected and reported honestly: unsigned bundles are reported as
+  such, with the consequence noted (no system-VPN registration possible without
+  per-install signing; LiveContainer in-app mode unaffected)
 - App and extension signing states are consistent
+
+On macOS runners it additionally runs real tooling: `codesign --verify
+--strict --deep`, `codesign -dv` (authority/team/profile), entitlement dumps
+(application-groups + packet-tunnel-provider), `security cms -D` decoding of
+`embedded.mobileprovision` (name/team/expiration/application-identifier), and
+`otool` Mach-O/LC_BUILD_VERSION checks. On other hosts those steps are skipped
+with a notice.
 
 ---
 
@@ -149,7 +176,7 @@ The script checks:
 6. startVPNTunnel() invoked
 7. iOS launches TunnexaPacketTunnel.appex process
 8. PacketTunnelProvider.startTunnel() installs NEPacketTunnelNetworkSettings
-9. Local SOCKS5 dispatcher (port 10808) starts; Tun2SocksKit is launched on a dedicated thread with the TUN fd, pointed at the loopback dispatcher
+9. Local SOCKS5 dispatcher (port 10808) starts; Tun2SocksKit is launched on a dedicated thread (no caller-supplied fd — the engine discovers the packet flow's `utun` socket itself), pointed at the loopback dispatcher
 10. All device traffic routes through TUN → dispatcher (rules & groups) → SOCKS5 proxy
 11. UI displays Connected status; a sampler reports upload/download statistics every second
 12. stopVPN() → PacketTunnelProvider.stopTunnel() → dispatcher stopped → Tun2SocksKit quit + join (thread exits cleanly)

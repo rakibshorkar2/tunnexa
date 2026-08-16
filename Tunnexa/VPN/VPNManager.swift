@@ -55,14 +55,8 @@ public class VPNManager: ObservableObject {
     public func loadProviderManager(completion: @escaping (Result<NETunnelProviderManager, VPNErrorDetails>) -> Void) {
         let env = VPNEnvironmentDetector.detectEnvironment()
 
-        if env == .liveContainer {
-            let errorDetails = VPNErrorDetails(
-                domain: "Tunnexa.Environment",
-                code: 100,
-                message: "LiveContainer guest runtime detected.",
-                failureReason: "LiveContainer cannot register iOS NetworkExtension Packet Tunnel app extensions.",
-                environment: .liveContainer
-            )
+        guard env.isSupportedForSystemVPN else {
+            let errorDetails = environmentUnsupportedError(env: env)
             self.lastError = errorDetails
             state = .unavailable
             completion(.failure(errorDetails))
@@ -202,7 +196,7 @@ public class VPNManager: ObservableObject {
 
     private func refreshState() {
         let env = VPNEnvironmentDetector.detectEnvironment()
-        guard env != .liveContainer else {
+        guard env.isSupportedForSystemVPN else {
             state = .unavailable
             return
         }
@@ -225,13 +219,8 @@ public class VPNManager: ObservableObject {
 
     public func startVPN(completion: @escaping (Result<Void, VPNErrorDetails>) -> Void) {
         let env = VPNEnvironmentDetector.detectEnvironment()
-        guard env != .liveContainer else {
-            let errorDetails = VPNErrorDetails(
-                domain: "Tunnexa.Environment",
-                code: 100,
-                message: "LiveContainer guest runtime cannot run system-wide VPN tunnels.",
-                environment: .liveContainer
-            )
+        guard env.isSupportedForSystemVPN else {
+            let errorDetails = environmentUnsupportedError(env: env)
             lastError = errorDetails
             state = .unavailable
             completion(.failure(errorDetails))
@@ -276,6 +265,33 @@ public class VPNManager: ObservableObject {
         lastError = errorDetails
         SharedLogging.log("startVPN aborted: \(message)", category: .vpn, level: .error)
         completion(.failure(errorDetails))
+    }
+
+    /// Environment-specific refusal for runtimes that cannot host a system VPN.
+    private func environmentUnsupportedError(env: VPNRuntimeEnvironment) -> VPNErrorDetails {
+        let message: String
+        let reason: String?
+        switch env {
+        case .liveContainer:
+            message = "LiveContainer guest runtime detected."
+            reason = "LiveContainer cannot register iOS NetworkExtension Packet Tunnel app extensions. Use the in-app proxy mode instead."
+        case .simulator:
+            message = "The iOS Simulator does not support Tunnexa's system-wide VPN."
+            reason = "Packet tunnel providers cannot be validated on the simulator. Install Tunnexa on a physical iPhone to use the system VPN; the in-app proxy remains available for testing."
+        case .unsupported, .unknown:
+            message = "This runtime environment is not recognized as a supported Tunnexa installation."
+            reason = "The app bundle, container path and environment could not be matched to a standalone install. Reinstall Tunnexa and try again."
+        case .standalone:
+            message = "System VPN is not available in this environment."
+            reason = nil
+        }
+        return VPNErrorDetails(
+            domain: "Tunnexa.Environment",
+            code: 100,
+            message: message,
+            failureReason: reason,
+            environment: env
+        )
     }
 
     private func startTunnel(with manager: NETunnelProviderManager, completion: @escaping (Result<Void, VPNErrorDetails>) -> Void) {

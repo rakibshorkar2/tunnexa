@@ -3,62 +3,35 @@ import Network
 import NetworkExtension
 import Tun2SocksKit
 
-// The utun kernel-control constants live in <sys/kern_control.h> and
-// <net/if_utun.h>, which the Swift Darwin module does not expose on iOS.
-// Values below mirror the Darwin headers verbatim.
-private let SYSPROTO_CONTROL: Int32 = 2
-private let AF_SYS_CONTROL: UInt16 = 2
-private let CTL_MAX_NAME_LEN = 96
-private let CTLIOCGINFO: UInt = 0xc0644a03
-private let UTUN_OPT_IFNAME: Int32 = 2
-
-private struct ctl_info {
-    var ctl_id: UInt32 = 0
-    var ctl_name = [Int8](repeating: 0, count: CTL_MAX_NAME_LEN)
-}
-
-private struct sockaddr_ctl {
-    var sc_len: UInt8 = 0
-    var sc_family: UInt8 = 0
-    var ss_sysaddr: UInt16 = 0
-    var sc_id: UInt32 = 0
-    var sc_unit: UInt32 = 0
-    var sc_reserved = [UInt32](repeating: 0, count: 5)
-}
-
 public class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var localProxy: LocalProxyServer?
     private var engine: TunnelEngine?
     private var statsSampler: TunnelStatsSampler?
 
-    // Startup serialization: exactly one `completionHandler` call, even when
-    // several failure sources fire at once (engine exit + probe failure).
-    private enum StartupState {
-        case inProgress
-        case succeeded
-        case failed
-    }
-    private let stateLock = NSLock()
-    private var startupState: StartupState = .inProgress
-    private var pendingCompletionHandler: ((Error?) -> Void)?
+    /// Startup serialization: exactly one `completionHandler` call per tunnel
+    /// session, even when several failure sources fire at once (engine exit +
+    /// probe failure). The machine is reset on every `startTunnel` invocation
+    /// because iOS reuses this provider instance across sessions.
+    private let startup = StartupStateMachine()
 
     public override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         SharedLogging.log("Starting Packet Tunnel Provider...", category: .vpn)
+        startup.begin(handler: completionHandler)
 
         let settings = SharedSettings()
         guard let config = settings.loadConfiguration() else {
-            completionHandler(providerError(code: 100, message: "No proxy configuration found in shared defaults."))
+            finishStartup(providerError(code: 100, message: "No proxy configuration found in shared defaults."))
             return
         }
 
         // Fail-closed: refuse to start a tunnel that cannot route anything.
         guard config.hasUsableSelection else {
-            completionHandler(providerError(code: 101, message: "No proxies or groups configured. Import a configuration first."))
+            finishStartup(providerError(code: 101, message: "No proxies or groups configured. Import a configuration first."))
             return
         }
         if !SharedSettings.hasValidSelection(config: config, selectedProxy: settings.selectedProxyName, selectedGroup: settings.selectedGroupName) {
-            completionHandler(providerError(code: 102, message: "The selected proxy is no longer available. Choose a proxy in the app and try again."))
+            finishStartup(providerError(code: 102, message: "The selected proxy is no longer available. Choose a proxy in the app and try again."))
             return
         }
 
@@ -112,36 +85,25 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self = self else { return }
             if let error = error {
                 SharedLogging.log("Failed to set tunnel network settings: \(error.localizedDescription)", category: .vpn, level: .error)
-                completionHandler(error)
+                self.finishStartup(error)
                 return
             }
-            self.proceedAfterNetworkSettings(config: config, settings: settings, mtu: mtu, isIPv6Enabled: isIPv6Enabled, completionHandler: completionHandler)
+            self.proceedAfterNetworkSettings(config: config, settings: settings, mtu: mtu, isIPv6Enabled: isIPv6Enabled)
         }
     }
 
     /// Everything after the network settings are applied. The startup only
     /// succeeds once every component is verified:
-    ///  - the TUN descriptor is acquired and handed to the engine;
     ///  - the local dispatcher listener is actually `.ready`;
     ///  - the engine thread is running and does not exit during startup;
     ///  - the dispatcher answers a real SOCKS5 probe.
+    ///
+    /// The TUN descriptor is never touched by this code: `NEPacketTunnelFlow`
+    /// owns it, and `Socks5Tunnel.run(withConfig:)` discovers it itself.
     /// Any failure tears everything down and reports the real error.
-    private func proceedAfterNetworkSettings(config: ProxyConfiguration, settings: SharedSettings, mtu: Int, isIPv6Enabled: Bool, completionHandler: @escaping (Error?) -> Void) {
-        stateLock.lock()
-        pendingCompletionHandler = completionHandler
-        stateLock.unlock()
+    private func proceedAfterNetworkSettings(config: ProxyConfiguration, settings: SharedSettings, mtu: Int, isIPv6Enabled: Bool) {
 
-        // 2. TUN file descriptor.
-        // Primary: ioctl scan of the existing utun interfaces (no KVC).
-        // Fallback: the documented-but-private
-        // `packetFlow.value(forKeyPath: "socket.fileDescriptor")`.
-        guard let tunFd = TunnelFileDescriptor.tunnelFd() ?? TunnelFileDescriptor.kvcPacketFlowFd(of: packetFlow) else {
-            finishStartup(providerError(code: 2, message: "Failed to extract TUN interface file descriptor."))
-            return
-        }
-        SharedLogging.log("TUN file descriptor acquired: \(tunFd)", category: .tunnel)
-
-        // 3. Local SOCKS5 dispatcher on 127.0.0.1.
+        // 2. Local SOCKS5 dispatcher on 127.0.0.1.
         let localPort: UInt16 = AppConfigConstants.localProxyPort
         let dispatcher = LocalProxyServer(port: localPort, settings: settings)
         dispatcher.hostResolver = { host, completion in
@@ -150,16 +112,14 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
         do {
             try dispatcher.start()
         } catch {
-            // The descriptor was never handed to the engine: close it here.
-            close(tunFd)
             finishStartup(providerError(code: 3, message: "Failed to start local SOCKS5 dispatcher: \(error.localizedDescription)"))
             return
         }
         localProxy = dispatcher
 
-        // 4. Engine. Ownership of `tunFd` transfers to the engine.
-        let configYAML = buildEngineConfigYAML(mtu: mtu, tunFd: tunFd, isIPv6Enabled: isIPv6Enabled, localPort: localPort)
-        let engine = TunnelEngine(configYAML: configYAML, tunFd: tunFd) { config in
+        // 3. Engine.
+        let configYAML = EngineConfigBuilder.build(mtu: mtu, isIPv6Enabled: isIPv6Enabled, localPort: localPort)
+        let engine = TunnelEngine(configYAML: configYAML) { config in
             Socks5Tunnel.run(withConfig: .string(content: config))
         }
         engine.onStopRequested = { Socks5Tunnel.quit() }
@@ -176,13 +136,13 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
-        // 5. Probe the local dispatcher end-to-end (SOCKS5 greeting + CONNECT).
+        // 4. Probe the local dispatcher end-to-end (SOCKS5 greeting + CONNECT).
         guard probeLocalDispatcher(settings: settings, timeout: 5.0) else {
             finishStartup(providerError(code: 5, message: "Local SOCKS5 dispatcher did not answer the startup probe."))
             return
         }
 
-        // 6. Statistics + success.
+        // 5. Statistics + success.
         let sampler = TunnelStatsSampler(settings: settings)
         sampler.statsProvider = { () -> (upBytes: Int64, downBytes: Int64)? in
             let stats = Socks5Tunnel.stats
@@ -192,40 +152,6 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
         statsSampler = sampler
 
         finishStartup(nil)
-    }
-
-    private func buildEngineConfigYAML(mtu: Int, tunFd: Int32, isIPv6Enabled: Bool, localPort: UInt16) -> String {
-        var configYAML = """
-        tunnel:
-          name: tun0
-          mtu: \(mtu)
-          fd: \(tunFd)
-          ipv4: \(AppConfigConstants.tunnelIPv4)
-
-        """
-        if isIPv6Enabled {
-            configYAML += "  ipv6: '\(AppConfigConstants.tunnelIPv6)'\n"
-        }
-        configYAML += """
-        socks5:
-          address: 127.0.0.1
-          port: \(localPort)
-          udp: udp
-        mapdns:
-          address: \(AppConfigConstants.dnsIPv4)
-          port: 53
-          network: 100.64.0.0
-          netmask: 255.192.0.0
-          cache-size: 10000
-        misc:
-          task-stack-size: 20480
-          connect-timeout: 5000
-          read-write-timeout: 60000
-          log-file: stderr
-          log-level: warn
-          limit-nofile: 65535
-        """
-        return configYAML
     }
 
     /// Resolves hostname proxy endpoints once at startup so their IPs can be
@@ -280,24 +206,14 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
 
     /// Fail the startup if it has not completed yet (engine exited early).
     private func failStartupIfStillInProgress(code: Int32) {
-        stateLock.lock()
-        let inProgress = startupState == .inProgress
-        stateLock.unlock()
-        guard inProgress else { return }
+        guard startup.isInProgress else { return }
         finishStartup(providerError(code: 4, message: "Tunnel engine exited with code \(code) during startup."))
     }
 
     /// Single exit point for the startup continuation. Guarantees the
     /// completion handler runs exactly once; tears everything down on failure.
     private func finishStartup(_ error: Error?) {
-        stateLock.lock()
-        guard startupState == .inProgress, let handler = pendingCompletionHandler else {
-            stateLock.unlock()
-            return
-        }
-        startupState = error == nil ? .succeeded : .failed
-        pendingCompletionHandler = nil
-        stateLock.unlock()
+        guard let handler = startup.settle(error) else { return }
 
         if let error = error {
             teardown()
@@ -318,8 +234,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
         localProxy?.stop()
         localProxy = nil
 
-        // Engine last: it owns the TUN descriptor and closes it exactly once
-        // after its thread exits.
+        // Engine last; the loop is stopped via `Socks5Tunnel.quit()`.
         engine?.stop()
         engine = nil
     }
@@ -327,10 +242,9 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
     public override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLogging.log("Stopping Packet Tunnel Provider... Reason: \(reason.rawValue)", category: .vpn)
 
-        stateLock.lock()
-        startupState = .failed
-        pendingCompletionHandler = nil
-        stateLock.unlock()
+        // Retire any still-pending startup (the system is tearing the session
+        // down; the handler must not be invoked after stopTunnel).
+        startup.cancel()
 
         teardown()
         completionHandler()
@@ -455,122 +369,5 @@ extension PacketTunnelProvider {
             SharedLogging.log("Startup probe timed out after \(timeout)s.", category: .vpn, level: .error)
         }
         return probeResult
-    }
-}
-
-// MARK: - TUN file descriptor acquisition
-
-enum TunnelFileDescriptor {
-
-    /// Returns an OWNED TUN file descriptor bound to an existing utun
-    /// interface, or nil. The caller becomes the owner and must hand it to the
-    /// engine (which closes it); it is never closed here.
-    ///
-    /// Strategy (avoids the `kCTLAll`/utun0 trap):
-    ///  - enumerate the existing utun interfaces via `getifaddrs`;
-    ///  - prefer the highest-numbered interface (the packet flow attaches to
-    ///    the most recently created one);
-    ///  - skip utun0 (reserved by the system — with `sc_unit == 0` the kernel
-    ///    treats the request as `kCTLAll` and may create/steal an interface);
-    ///  - verify the bound name after connect and reject mismatches.
-    static func tunnelFd() -> Int32? {
-        var indexes = existingUtunIndexes()
-        indexes.removeAll { $0 == 0 }
-        for index in indexes.sorted(by: >) {
-            if let fd = openTunnelFd(utunIndex: index, expectedName: "utun\(index)") {
-                return fd
-            }
-        }
-        // No existing interface to attach to: request a specific free unit.
-        // Never unit 0 (`kCTLAll`).
-        for index in 1...255 {
-            if let fd = openTunnelFd(utunIndex: index, expectedName: "utun\(index)") {
-                return fd
-            }
-        }
-        return nil
-    }
-
-    /// Documented fallback: reads the packet flow's socket descriptor through
-    /// KVC. Works on current iOS versions but relies on a private key path.
-    static func kvcPacketFlowFd(of packetFlow: NEPacketTunnelFlow) -> Int32? {
-        guard let fd = packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32, fd > 0 else {
-            return nil
-        }
-        return fd
-    }
-
-    private static func existingUtunIndexes() -> [Int] {
-        var list: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&list) == 0, let head = list else { return [] }
-        defer { freeifaddrs(head) }
-        var indexes: [Int] = []
-        var cursor: UnsafeMutablePointer<ifaddrs>? = head
-        while let node = cursor {
-            let name = String(cString: node.pointee.ifa_name)
-            if name.hasPrefix("utun") {
-                let digits = name.dropFirst(4)
-                if !digits.isEmpty, let index = Int(digits) {
-                    indexes.append(index)
-                }
-            }
-            cursor = node.pointee.ifa_next
-        }
-        return indexes
-    }
-
-    /// Opens a control socket and attaches it to the requested utun unit.
-    /// Returns the open descriptor on success (verified against
-    /// `expectedName`); closes it on any failure. The descriptor is owned by
-    /// the caller on success.
-    private static func openTunnelFd(utunIndex: Int, expectedName: String) -> Int32? {
-        let name = "utun\(utunIndex)"
-        var interfaceName = [UInt8](repeating: 0, count: Int(IFNAMSIZ))
-        name.withCString { source in
-            _ = strlcpy(&interfaceName, source, interfaceName.count)
-        }
-
-        let fd = socket(AF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL)
-        guard fd >= 0 else { return nil }
-
-        var controlInfo = ctl_info()
-        "com.apple.net.utun_control".withCString { source in
-            _ = strlcpy(&controlInfo.ctl_name, source, Int(CTL_MAX_NAME_LEN))
-        }
-        guard ioctl(fd, CTLIOCGINFO, &controlInfo) == 0 else {
-            close(fd)
-            return nil
-        }
-
-        var controlAddress = sockaddr_ctl()
-        controlAddress.sc_len = UInt8(MemoryLayout<sockaddr_ctl>.size)
-        controlAddress.sc_family = UInt8(AF_SYSTEM)
-        controlAddress.ss_sysaddr = AF_SYS_CONTROL
-        controlAddress.sc_id = controlInfo.ctl_id
-        controlAddress.sc_unit = UInt32(utunIndex)
-
-        let connectResult = withUnsafePointer(to: &controlAddress) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
-                connect(fd, address, socklen_t(MemoryLayout<sockaddr_ctl>.size))
-            }
-        }
-        guard connectResult == 0 else {
-            close(fd)
-            return nil
-        }
-
-        var boundName = [UInt8](repeating: 0, count: Int(IFNAMSIZ))
-        var boundNameSize = socklen_t(boundName.count)
-        guard getsockopt(fd, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, &boundName, &boundNameSize) == 0 else {
-            close(fd)
-            return nil
-        }
-        let bound = String(bytes: boundName.prefix(Int(boundNameSize)), encoding: .utf8) ?? ""
-        guard bound == expectedName else {
-            SharedLogging.log("utun attach mismatch: requested \(expectedName), bound \(bound).", category: .tunnel, level: .warning)
-            close(fd)
-            return nil
-        }
-        return fd
     }
 }

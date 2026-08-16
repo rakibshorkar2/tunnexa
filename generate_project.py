@@ -95,6 +95,7 @@ APP_FILES = [
     (file_ref_id(0x15), "ProxyHealthTester.swift", "VPN", True, False),
     (file_ref_id(0x1C), "AutoReconnectPolicy.swift", "VPN", True, False),
     (file_ref_id(0x1E), "DiagnosticsRunner.swift", "VPN", True, False),
+    (file_ref_id(0x23), "InAppProxyManager.swift", "VPN", True, False),
     (file_ref_id(0x08), "ProxyViewModel.swift", "ViewModels", True, False),
     (file_ref_id(0x09), "VPNViewModel.swift", "ViewModels", True, False),
     (file_ref_id(0x0A), "MainView.swift", "Views", True, False),
@@ -112,6 +113,8 @@ EXT_FILES = [
     (file_ref_id(0x06), "PacketTunnelProvider.swift", None, False, True),
     (file_ref_id(0x1F), "TunnelEngine.swift", None, True, True),
     (file_ref_id(0x20), "ProxyEndpointResolver.swift", None, False, True),
+    (file_ref_id(0x21), "EngineConfigBuilder.swift", None, True, True),
+    (file_ref_id(0x22), "StartupStateMachine.swift", None, True, True),
 ]
 
 TEST_FILES = [
@@ -124,6 +127,9 @@ TEST_FILES = [
     (test_file_ref_id(0x08), "AutoReconnectTests.swift"),
     (test_file_ref_id(0x09), "LogRedactionTests.swift"),
     (test_file_ref_id(0x0A), "TunnelEngineTests.swift"),
+    (test_file_ref_id(0x0B), "EnvironmentDetectorTests.swift"),
+    (test_file_ref_id(0x0C), "EngineConfigTests.swift"),
+    (test_file_ref_id(0x0D), "StartupStateMachineTests.swift"),
 ]
 
 APP_BUILD_SEQ = iter(range(0x01, 0x40))
@@ -165,6 +171,9 @@ APP_BUILD_BY_FILE = {
     file_ref_id(0x1C): app_build_id(0x22),  # AutoReconnectPolicy
     file_ref_id(0x1E): app_build_id(0x23),  # DiagnosticsRunner
     file_ref_id(0x1F): app_build_id(0x2E),  # TunnelEngine in App (for tests)
+    file_ref_id(0x21): app_build_id(0x31),  # EngineConfigBuilder in App (for tests)
+    file_ref_id(0x22): app_build_id(0x32),  # StartupStateMachine in App (for tests)
+    file_ref_id(0x23): app_build_id(0x30),  # InAppProxyManager
 }
 
 EXT_BUILD_BY_FILE = {
@@ -179,6 +188,8 @@ EXT_BUILD_BY_FILE = {
     file_ref_id(0x1D): app_build_id(0x24),  # TunnelState
     file_ref_id(0x1F): app_build_id(0x27),  # TunnelEngine
     file_ref_id(0x20): app_build_id(0x28),  # ProxyEndpointResolver
+    file_ref_id(0x21): app_build_id(0x33),  # EngineConfigBuilder
+    file_ref_id(0x22): app_build_id(0x34),  # StartupStateMachine
 }
 
 TEST_BUILD_BY_FILE = {
@@ -191,6 +202,9 @@ TEST_BUILD_BY_FILE = {
     test_file_ref_id(0x08): app_build_id(0x2C),
     test_file_ref_id(0x09): app_build_id(0x2D),
     test_file_ref_id(0x0A): app_build_id(0x2F),
+    test_file_ref_id(0x0B): app_build_id(0x35),
+    test_file_ref_id(0x0C): app_build_id(0x36),
+    test_file_ref_id(0x0D): app_build_id(0x37),
 }
 
 # ---------------------------------------------------------------------------

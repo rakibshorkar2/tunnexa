@@ -19,6 +19,10 @@ public enum SettingsKey {
     public static let localAuthUsername = "setting_local_auth_username"
     public static let localAuthPassword = "setting_local_auth_password"
 
+    // In-app proxy mode (LiveContainer / simulator): run the dispatcher inside
+    // the app process instead of the packet tunnel.
+    public static let inAppProxyEnabled = "setting_inapp_proxy"
+
     // Selection (wire format: by name)
     public static let selectedProxy = "selected_proxy"
     public static let selectedGroup = "selected_group"
@@ -166,6 +170,12 @@ public struct SharedSettings {
     public var killSwitchEnabled: Bool {
         get { bool(SettingsKey.killSwitch) }
         set { set(newValue, forKey: SettingsKey.killSwitch) }
+    }
+
+    /// In-app proxy mode preference (used in LiveContainer / simulator).
+    public var inAppProxyEnabled: Bool {
+        get { bool(SettingsKey.inAppProxyEnabled) }
+        set { set(newValue, forKey: SettingsKey.inAppProxyEnabled) }
     }
 
     /// Validated MTU. Invalid stored values are reported as `nil`.

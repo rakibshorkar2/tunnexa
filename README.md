@@ -1,6 +1,8 @@
 # Tunnexa — System-Wide SOCKS5 VPN Client for iOS
 
-Tunnexa is a native iOS SOCKS5 proxy client and VPN application. It intercepts all device network traffic (TCP, UDP, DNS, and IPv6 where supported) using Apple's **NetworkExtension** framework and routes it through a custom user-space packet-to-SOCKS5 routing architecture.
+Tunnexa is a native iOS SOCKS5 proxy client. On a **standalone (signed or per-version-signed) install** it tunnels all device traffic using Apple's **NetworkExtension** framework: a `NEPacketTunnelProvider` captures raw IP packets, a user-space engine (hev-socks5-tunnel via Tun2SocksKit) translates them into SOCKS5 streams, and a local Swift dispatcher applies routing rules and relays to the configured upstream proxies.
+
+Tunnexa also runs inside **LiveContainer** or the **simulator**, where a system VPN is impossible: in those environments it detects the guest runtime and exposes the same dispatcher as an **in-app SOCKS5 proxy on `127.0.0.1:10808`** (with no system VPN involved). See [DEPLOYMENT.md](DEPLOYMENT.md) for mode details.
 
 ---
 
@@ -9,7 +11,7 @@ Tunnexa is a native iOS SOCKS5 proxy client and VPN application. It intercepts a
 ```text
 iPhone applications (Safari, Mail, Games, DNS)
         │
-        ▼ [Virtual Interface capture]
+        ▼ [Virtual Interface capture]        (standalone mode only)
 iOS Network Stack
         │
         ▼ [Raw IP packet flow]
@@ -26,14 +28,15 @@ Local SOCKS5 Dispatcher & Router (Swift NWListener)
 ```
 
 ### Components
-1. **Tunnexa (Main iOS Application)**: Manages proxy configurations, importing Clash-style configurations, testing proxy health (latency), configuring settings, and starting/stopping the tunnel.
+1. **Tunnexa (Main iOS Application)**: Manages proxy configurations, importing Clash-style configurations, testing proxy health (latency), configuring settings, and starting/stopping the tunnel (or the in-app proxy in LiveContainer/simulator).
 2. **TunnexaPacketTunnel (Packet Tunnel Provider Extension)**: A network extension target that runs the virtual TUN interface. It captures raw IP packets, translates them into TCP/UDP streams via `Tun2SocksKit`, redirects them to the local SOCKS5 dispatcher, matches domain rules, and relays the payload to the remote proxies.
-3. **Local SOCKS5 Dispatcher**: A custom server written in Swift using Apple's high-performance `Network` framework. Running locally within the extension's process, it acts as a smart gateway, supporting TCP/UDP traffic forwarding, round-robin load-balancing, and domain rules matching.
+3. **Local SOCKS5 Dispatcher**: A custom server written in Swift using Apple's high-performance `Network` framework. Running locally (inside the extension's process, or inside the app process in in-app mode), it acts as a smart gateway, supporting TCP/UDP traffic forwarding, round-robin load-balancing, and domain rules matching.
 
 ---
 
 ## Features
-- **True System-Wide Tunneling**: Intercepts and tunnels all TCP and UDP traffic device-wide.
+- **True System-Wide Tunneling (standalone installs)**: Intercepts and tunnels all TCP and UDP traffic device-wide.
+- **Runtime-aware mode selection**: detects standalone / LiveContainer / simulator environments and only attempts a system VPN where it is possible; elsewhere it surfaces the in-app proxy — never a fake "connected" VPN state.
 - **Fail-Closed Kill Switch**: If the selected proxy fails or becomes unreachable, Tunnexa blocks traffic rather than falling back to direct, unprotected network routing.
 - **DNS-over-SOCKS5**: Employs `mapdns` to capture local DNS queries on `198.18.0.2`, map domains to virtual IPs (e.g. `100.64.0.0/10`), and perform remote name resolution via domain SOCKS5 requests, preventing DNS leaks.
 - **Clash YAML Configuration Import**: Supports importing `.yaml` / `.yml` configurations directly from the iOS Files app or Share Sheet.
@@ -71,10 +74,12 @@ Tunnexa includes a `.github/workflows/build.yml` file which runs on every push:
 1. Regenerates the Xcode project and verifies the generator is deterministic (the checked-in `project.pbxproj` must not change on re-generation).
 2. Derives unique build numbers from the action run numbers.
 3. Resolves SPM packages (such as `Tun2SocksKit`) with a dependency cache.
-4. Runs the full unit test suite (routing, YAML parsing, SOCKS5 protocol, health tester, credential store, auto-reconnect, log redaction) on an iOS Simulator.
+4. Runs the full unit test suite (routing, YAML parsing, SOCKS5 protocol, health tester, credential store, auto-reconnect, log redaction, environment detection, engine config, startup state machine) on an iOS Simulator.
 5. Compiles both targets without signing restrictions.
-6. Packages the app into an unsigned `.ipa` and `.zip` file and validates the packaging with `validate_ipa.py` (bundle IDs, embedded extension, signing state).
+6. Packages the app into an unsigned `.ipa` and `.zip` file and validates the packaging with `validate_ipa.py` (bundle IDs, embedded extension, Mach-O binaries, signing state; macOS runners additionally run `codesign`/`security`/`otool` checks).
 7. Deploys a GitHub Release with the build number as tag (e.g., `build-123`) and uploads the release assets.
+
+> **Honest limitation:** the CI artifact is unsigned. An unsigned bundle **cannot register a system-wide VPN provider** on a physical iPhone; use it with LiveContainer (in-app proxy mode) or re-sign it with a profile carrying the Network Extension entitlements. See `DEPLOYMENT.md`.
 
 ---
 

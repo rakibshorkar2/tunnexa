@@ -59,17 +59,41 @@ public struct VPNErrorDetails: Identifiable, Codable, Error {
     }
     
     public var userFriendlyExplanation: String {
-        if environment == .liveContainer {
+        switch environment {
+        case .liveContainer:
             return """
             Unsupported Runtime Environment (LiveContainer)
-            
+
             • Tunnexa requires an independently registered iOS NetworkExtension Packet Tunnel ('TunnexaPacketTunnel.appex') to route system-wide traffic.
             • LiveContainer runs guest applications inside a sandbox and cannot register app extensions with the iOS kernel.
             • This is an iOS platform and container constraint, not a SOCKS5 server or proxy configuration error.
-            
+
             To use Tunnexa as a system-wide VPN:
             Install Tunnexa as a standalone iOS app using TrollStore, AltStore, or Sideloadly.
+            Alternatively, use Tunnexa's in-app proxy mode so guest applications can route through the configured proxies.
             """
+        case .simulator:
+            return """
+            Unsupported Runtime Environment (Simulator)
+
+            • The iOS Simulator cannot run Tunnexa's Packet Tunnel extension the way a physical device can.
+            • Tunnexa will not present system-VPN controls as functional in this environment.
+            • The in-app loopback proxy (127.0.0.1:10808) is available for testing the dispatcher and proxy connections.
+
+            To use the system-wide VPN:
+            Install Tunnexa on a physical iPhone (TrollStore, AltStore, Sideloadly, or an Apple Developer certificate).
+            """
+        case .unsupported, .unknown:
+            return """
+            Unrecognized Runtime Environment
+
+            • Tunnexa could not positively identify this installation as a standalone app, a LiveContainer guest, or the simulator.
+            • It will not attempt to start a system VPN in an ambiguous runtime.
+
+            Reinstall Tunnexa as a standalone app and try again.
+            """
+        case .standalone:
+            break
         }
         
         // Handle common iOS NetworkExtension error domains and codes

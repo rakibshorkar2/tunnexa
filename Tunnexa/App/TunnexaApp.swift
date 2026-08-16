@@ -40,7 +40,12 @@ struct TunnexaApp: App {
             if phase == .active {
                 // Refresh stored config and attempt auto-connect when configured.
                 proxyViewModel.loadSavedConfig()
-                VPNManager.shared.autoConnectIfNeeded()
+                let caps = VPNEnvironmentDetector.currentCapabilities()
+                if caps.canUsePacketTunnel {
+                    VPNManager.shared.autoConnectIfNeeded()
+                } else if caps.canUseInAppProxy, SharedSettings().inAppProxyEnabled {
+                    InAppProxyManager.shared.start()
+                }
             }
         }
     }
