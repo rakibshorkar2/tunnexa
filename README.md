@@ -70,14 +70,24 @@ Apple restricts `NEPacketTunnelProvider` network extensions to signed developer 
 *Note: For local iOS Simulator runs or unsigned archiving in CI, the code is configured to compile and archive without code signing, utilizing a fallback obfuscated UserDefaults database for passwords instead of Keychain sharing groups.*
 
 ### 3. CI/CD Releases (GitHub Actions)
-Tunnexa includes a `.github/workflows/build.yml` file which runs on every push:
+Tunnexa includes a `.github/workflows/build.yml` file which runs on every push. It has **two independent jobs**:
+
+**`build` (production — never gated on tests):**
 1. Regenerates the Xcode project and verifies the generator is deterministic (the checked-in `project.pbxproj` must not change on re-generation).
 2. Derives unique build numbers from the action run numbers.
 3. Resolves SPM packages (such as `Tun2SocksKit`) with a dependency cache.
-4. Runs the full unit test suite (routing, YAML parsing, SOCKS5 protocol, health tester, credential store, auto-reconnect, log redaction, environment detection, engine config, startup state machine) on an iOS Simulator.
-5. Compiles both targets without signing restrictions.
-6. Packages the app into an unsigned `.ipa` and `.zip` file and validates the packaging with `validate_ipa.py` (bundle IDs, embedded extension, Mach-O binaries, signing state; macOS runners additionally run `codesign`/`security`/`otool` checks).
-7. Deploys a GitHub Release with the build number as tag (e.g., `build-123`) and uploads the release assets.
+4. Archives the **iPhoneOS arm64** Release configuration (target device: iPhone 15 Pro) with the PacketTunnel extension embedded.
+5. Packages the app into an unsigned `.ipa` and `.zip` file and validates the packaging with `validate_ipa.py` (bundle IDs, embedded extension, `NSExtension` packet-tunnel metadata, Mach-O binaries, arm64-only slices, App Group declaration, signing state; macOS runners additionally run `codesign`/`security`/`otool` checks).
+6. Deploys a GitHub Release with the build number as tag (e.g., `build-123`) and uploads the release assets.
+
+**`simulator-tests` (code-quality gate — runs in parallel, never blocks the build):**
+- Compiles the app + extension + tests once for the arm64 iOS Simulator (DerivedData cached across runs), then runs **only the simulator-suitable subset**: pure Swift/unit tests, SOCKS5/YAML/protocol tests, hermetic DNS regression, and injected engine-lifecycle tests.
+- `NEPacketTunnelProvider`/`NEVPNManager` behavior and real upstream networking are **not** exercised on the simulator — they are validated on a physical iPhone only.
+
+#### CI Labels
+- `IPHONEOS_BUILD_PASS` — reported by the `build` job after the arm64 archive succeeds.
+- `IPA_VALIDATION_PASS` — reported by the `build` job after archive/IPA validation succeeds.
+- `SIMULATOR_TESTS_PASS` — reported by the `simulator-tests` job. **Code-quality only; it is NOT proof that the VPN works.**
 
 > **Honest limitation:** the CI artifact is unsigned. An unsigned bundle **cannot register a system-wide VPN provider** on a physical iPhone; use it with LiveContainer (in-app proxy mode) or re-sign it with a profile carrying the Network Extension entitlements. See `DEPLOYMENT.md`.
 

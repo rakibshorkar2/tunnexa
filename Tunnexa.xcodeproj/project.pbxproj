@@ -21,6 +21,8 @@
 		110000010001000100000021 /* SharedSettings.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001B /* SharedSettings.swift */; };
 		110000010001000100000020 /* TunnelState.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001D /* TunnelState.swift */; };
 		110000010001000100000024 /* TunnelState.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001D /* TunnelState.swift */; };
+		110000010001000100000038 /* TunnelError.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000024 /* TunnelError.swift */; };
+		110000010001000100000039 /* TunnelError.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000024 /* TunnelError.swift */; };
 		110000010001000100000005 /* YAMLParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000003 /* YAMLParser.swift */; };
 		110000010001000100000009 /* VPNManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000007 /* VPNManager.swift */; };
 		110000010001000100000015 /* ProxyHealthTester.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110000020002000200000015 /* ProxyHealthTester.swift */; };
@@ -41,6 +43,7 @@
 		110000010001000100000008 /* PacketTunnelProvider.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000006 /* PacketTunnelProvider.swift */; };
 		11000001000100010000002E /* TunnelEngine.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001F /* TunnelEngine.swift */; };
 		110000010001000100000027 /* TunnelEngine.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 11000002000200020000001F /* TunnelEngine.swift */; };
+		110000010001000100000025 /* ProxyEndpointResolver.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000020 /* ProxyEndpointResolver.swift */; };
 		110000010001000100000028 /* ProxyEndpointResolver.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000020 /* ProxyEndpointResolver.swift */; };
 		110000010001000100000031 /* EngineConfigBuilder.swift in Sources (App) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000021 /* EngineConfigBuilder.swift */; };
 		110000010001000100000033 /* EngineConfigBuilder.swift in Sources (Extension) */ = {isa = PBXBuildFile; fileRef = 110000020002000200000021 /* EngineConfigBuilder.swift */; };
@@ -87,6 +90,7 @@
 		11000002000200020000001A /* VPNErrorDetails.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VPNErrorDetails.swift; sourceTree = "<group>"; };
 		11000002000200020000001B /* SharedSettings.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SharedSettings.swift; sourceTree = "<group>"; };
 		11000002000200020000001D /* TunnelState.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TunnelState.swift; sourceTree = "<group>"; };
+		110000020002000200000024 /* TunnelError.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TunnelError.swift; sourceTree = "<group>"; };
 		110000020002000200000003 /* YAMLParser.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = YAMLParser.swift; sourceTree = "<group>"; };
 		110000020002000200000007 /* VPNManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VPNManager.swift; sourceTree = "<group>"; };
 		110000020002000200000015 /* ProxyHealthTester.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProxyHealthTester.swift; sourceTree = "<group>"; };
@@ -176,6 +180,7 @@
 				11000002000200020000001A /* VPNErrorDetails.swift */,
 				11000002000200020000001B /* SharedSettings.swift */,
 				11000002000200020000001D /* TunnelState.swift */,
+				110000020002000200000024 /* TunnelError.swift */,
 			);
 			name = Shared;
 			path = Shared;
@@ -421,6 +426,7 @@
 				11000001000100010000001B /* VPNErrorDetails.swift in Sources (App) */,
 				11000001000100010000001E /* SharedSettings.swift in Sources (App) */,
 				110000010001000100000020 /* TunnelState.swift in Sources (App) */,
+				110000010001000100000038 /* TunnelError.swift in Sources (App) */,
 				110000010001000100000005 /* YAMLParser.swift in Sources */,
 				110000010001000100000009 /* VPNManager.swift in Sources */,
 				110000010001000100000015 /* ProxyHealthTester.swift in Sources */,
@@ -438,6 +444,7 @@
 				110000010001000100000010 /* TunnexaApp.swift in Sources */,
 				110000010001000100000026 /* LocalProxyServer.swift in Sources (App) */,
 				11000001000100010000002E /* TunnelEngine.swift in Sources (App) */,
+				110000010001000100000025 /* ProxyEndpointResolver.swift in Sources (App) */,
 				110000010001000100000031 /* EngineConfigBuilder.swift in Sources (App) */,
 				110000010001000100000032 /* StartupStateMachine.swift in Sources (App) */,
 			);
@@ -454,6 +461,7 @@
 				11000001000100010000001C /* VPNErrorDetails.swift in Sources (Extension) */,
 				110000010001000100000021 /* SharedSettings.swift in Sources (Extension) */,
 				110000010001000100000024 /* TunnelState.swift in Sources (Extension) */,
+				110000010001000100000039 /* TunnelError.swift in Sources (Extension) */,
 				110000010001000100000007 /* LocalProxyServer.swift in Sources (Extension) */,
 				110000010001000100000008 /* PacketTunnelProvider.swift in Sources (Extension) */,
 				110000010001000100000027 /* TunnelEngine.swift in Sources (Extension) */,

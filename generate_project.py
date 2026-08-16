@@ -86,6 +86,7 @@ SHARED_FILES = [
     (file_ref_id(0x1A), "VPNErrorDetails.swift", "Shared"),
     (file_ref_id(0x1B), "SharedSettings.swift", "Shared"),
     (file_ref_id(0x1D), "TunnelState.swift", "Shared"),
+    (file_ref_id(0x24), "TunnelError.swift", "Shared"),
 ]
 
 APP_FILES = [
@@ -112,7 +113,7 @@ EXT_FILES = [
     (file_ref_id(0x05), "LocalProxyServer.swift", None, True, True),
     (file_ref_id(0x06), "PacketTunnelProvider.swift", None, False, True),
     (file_ref_id(0x1F), "TunnelEngine.swift", None, True, True),
-    (file_ref_id(0x20), "ProxyEndpointResolver.swift", None, False, True),
+    (file_ref_id(0x20), "ProxyEndpointResolver.swift", None, True, True),
     (file_ref_id(0x21), "EngineConfigBuilder.swift", None, True, True),
     (file_ref_id(0x22), "StartupStateMachine.swift", None, True, True),
 ]
@@ -174,6 +175,8 @@ APP_BUILD_BY_FILE = {
     file_ref_id(0x21): app_build_id(0x31),  # EngineConfigBuilder in App (for tests)
     file_ref_id(0x22): app_build_id(0x32),  # StartupStateMachine in App (for tests)
     file_ref_id(0x23): app_build_id(0x30),  # InAppProxyManager
+    file_ref_id(0x20): app_build_id(0x25),  # ProxyEndpointResolver in App (for tests)
+    file_ref_id(0x24): app_build_id(0x38),  # TunnelError
 }
 
 EXT_BUILD_BY_FILE = {
@@ -190,6 +193,7 @@ EXT_BUILD_BY_FILE = {
     file_ref_id(0x20): app_build_id(0x28),  # ProxyEndpointResolver
     file_ref_id(0x21): app_build_id(0x33),  # EngineConfigBuilder
     file_ref_id(0x22): app_build_id(0x34),  # StartupStateMachine
+    file_ref_id(0x24): app_build_id(0x39),  # TunnelError
 }
 
 TEST_BUILD_BY_FILE = {

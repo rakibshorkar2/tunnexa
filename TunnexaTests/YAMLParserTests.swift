@@ -417,4 +417,139 @@ final class YAMLParserTests: XCTestCase {
         let redacted = SharedLogging.redactCredentials(logLine)
         XCTAssertEqual(redacted, logLine)
     }
+
+    // MARK: - Hardening: duplicate keys and resource limits
+
+    func testDuplicateMappingKeyRejected() {
+        let yamlContent = """
+        proxies:
+          - name: A
+            type: socks5
+            server: 192.0.2.1
+            port: 1080
+            port: 1081
+        """
+        XCTAssertThrowsError(try YAMLParser.parse(yamlContent)) { error in
+            guard case YAMLParsingError.invalidStructure(let line, let message) = error else {
+                return XCTFail("Expected invalidStructure, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Duplicate key 'port'"), "Unexpected message: \(message)")
+            XCTAssertEqual(line, 5)
+        }
+    }
+
+    func testDuplicateTopLevelKeyRejected() {
+        let yamlContent = """
+        proxies:
+          - name: A
+            type: socks5
+            server: 192.0.2.1
+            port: 1080
+        proxies:
+          - name: B
+            type: socks5
+            server: 192.0.2.2
+            port: 1080
+        """
+        XCTAssertThrowsError(try YAMLParser.parse(yamlContent)) { error in
+            guard case YAMLParsingError.invalidStructure(_, let message) = error else {
+                return XCTFail("Expected invalidStructure, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Duplicate key 'proxies'"))
+        }
+    }
+
+    func testDuplicateContinuationKeyRejected() {
+        let yamlContent = """
+        proxies:
+          - name: A
+            type: socks5
+            server: 192.0.2.1
+            port: 1080
+            name: B
+        """
+        XCTAssertThrowsError(try YAMLParser.parse(yamlContent)) { error in
+            guard case YAMLParsingError.invalidStructure(_, let message) = error else {
+                return XCTFail("Expected invalidStructure, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Duplicate key 'name'"))
+        }
+    }
+
+    func testOversizedDocumentRejected() {
+        var lines = ["proxies:"]
+        for index in 0..<20000 {
+            lines.append("  - name: P\(index)\n    type: socks5\n    server: 192.0.2.1\n    port: 1080")
+        }
+        let oversized = lines.joined(separator: "\n")
+        XCTAssertGreaterThan(oversized.utf8.count, YAMLLimits.maxDocumentBytes)
+        XCTAssertThrowsError(try YAMLParser.parse(oversized)) { error in
+            guard case YAMLParsingError.invalidStructure(let line, let message) = error else {
+                return XCTFail("Expected invalidStructure, got \(error)")
+            }
+            XCTAssertEqual(line, 1)
+            XCTAssertTrue(message.contains("byte limit"))
+        }
+    }
+
+    func testOversizedLineRejected() {
+        let padding = String(repeating: "x", count: YAMLLimits.maxLineLength + 1)
+        let yamlContent = "proxies:\n  - name: \(padding)\n    type: socks5\n    server: 192.0.2.1\n    port: 1080\n"
+        XCTAssertThrowsError(try YAMLParser.parse(yamlContent)) { error in
+            guard case YAMLParsingError.invalidStructure(let line, let message) = error else {
+                return XCTFail("Expected invalidStructure, got \(error)")
+            }
+            XCTAssertEqual(line, 2)
+            XCTAssertTrue(message.contains("character limit"))
+        }
+    }
+
+    func testProxyCountLimitEnforced() {
+        var lines = ["proxies:"]
+        for index in 0..<(YAMLLimits.maxProxies + 10) {
+            lines.append("  - name: P\(index)")
+            lines.append("    type: socks5")
+            lines.append("    server: 192.0.2.1")
+            lines.append("    port: 1080")
+        }
+        XCTAssertThrowsError(try YAMLParser.parse(lines.joined(separator: "\n"))) { error in
+            guard case YAMLParsingError.validation(let issues) = error else {
+                return XCTFail("Expected validation error, got \(error)")
+            }
+            XCTAssertTrue(issues.contains { $0.reason.contains("Too many proxies") })
+        }
+    }
+
+    func testRuleCountLimitEnforced() {
+        var lines = ["proxies:"]
+        lines.append("  - name: A")
+        lines.append("    type: socks5")
+        lines.append("    server: 192.0.2.1")
+        lines.append("    port: 1080")
+        lines.append("rules:")
+        for index in 0..<(YAMLLimits.maxRules + 10) {
+            lines.append("  - DOMAIN,example\(index).com,DIRECT")
+        }
+        XCTAssertThrowsError(try YAMLParser.parse(lines.joined(separator: "\n"))) { error in
+            guard case YAMLParsingError.validation(let issues) = error else {
+                return XCTFail("Expected validation error, got \(error)")
+            }
+            XCTAssertTrue(issues.contains { $0.reason.contains("Too many rules") })
+        }
+    }
+
+    func testDuplicateKeysStillAllowValidConfig() throws {
+        // Regression: the duplicate-key rejection must not break normal configs.
+        let yamlContent = """
+        proxies:
+          - name: "Server-1"
+            type: socks5
+            server: 192.0.2.10
+            port: 1080
+        rules:
+          - MATCH,DIRECT
+        """
+        let config = try YAMLParser.parse(yamlContent)
+        XCTAssertEqual(config.proxies.count, 1)
+    }
 }

@@ -338,11 +338,11 @@ struct MainView: View {
         switch vpnViewModel.state {
         case .connected:
             return Color(hex: "10B981") // Green
-        case .connecting, .preparing:
+        case .connecting, .preparing, .degraded:
             return Color(hex: "F59E0B") // Amber
         case .reasserting:
             return Color(hex: "F59E0B") // Amber
-        case .failed, .invalid:
+        case .failed, .proxyFailed, .fatal, .invalid:
             return Color(hex: "F43F5E") // Red
         default:
             return Color(hex: "64748B") // Slate/Gray
@@ -355,7 +355,10 @@ struct MainView: View {
         case .connecting: return "Connecting..."
         case .reasserting: return "Reconnecting..."
         case .disconnecting: return "Disconnecting..."
+        case .degraded: return "Degraded"
         case .failed: return "Failed"
+        case .proxyFailed: return "Proxy Failed"
+        case .fatal: return "Fatal"
         case .invalid: return "Invalid Profile"
         default: return "Disconnected"
         }

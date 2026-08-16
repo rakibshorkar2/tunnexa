@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import Tunnexa
 
 /// Tests for VPNEnvironmentDetector classification logic.
@@ -131,5 +132,112 @@ final class VPNManagerTests: XCTestCase {
             "com.rakib.tunnexa.PacketTunnel",
             "Provider bundle ID must match the embedded extension's CFBundleIdentifier"
         )
+    }
+}
+
+// MARK: - ProxyEndpointResolver deadlock regression
+//
+// Regression for the serial-queue deadlock: the async variant used to
+// dispatch onto the SAME serial queue as the synchronous variant and then
+// block on a semaphore for its result — the inner block could never run, so
+// every domain resolution stalled for the full 3 s timeout. The queue is now
+// concurrent; these tests assert wall-clock behaviour, which the serial
+// implementation fails catastrophically.
+final class ProxyEndpointResolverTests: XCTestCase {
+
+    func testConcurrentAsyncResolvesCompleteQuickly() {
+        let resolver = ProxyEndpointResolver.shared
+        resolver.clearCache()
+
+        let expectation = expectation(description: "all async resolves completed")
+        let lock = NSLock()
+        var completed = 0
+        let total = 4
+
+        let start = Date()
+        for _ in 0..<total {
+            resolver.resolve(host: "example.invalid") { _ in
+                lock.lock()
+                completed += 1
+                let done = completed == total
+                lock.unlock()
+                if done {
+                    expectation.fulfill()
+                }
+            }
+        }
+
+        wait(for: [expectation], timeout: 10)
+        let elapsed = Date().timeIntervalSince(start)
+        // The serial implementation takes ~3 s per call (semaphore timeout),
+        // serialized -> 12 s for 4 calls. The concurrent implementation must
+        // finish in well under half of one stall.
+        XCTAssertLessThan(elapsed, 2.5, "async resolves must not stall on a serial queue (took \(elapsed)s)")
+    }
+
+    func testSyncAndAsyncMixedUsageDoesNotDeadlock() {
+        let resolver = ProxyEndpointResolver.shared
+        resolver.clearCache()
+
+        let expectation = expectation(description: "async resolve completed")
+        var asyncDone = false
+
+        // Fire the async resolve first, then a sync resolve on the calling
+        // thread: the sync resolve must return promptly even while the async
+        // one is in flight.
+        resolver.resolve(host: "example.invalid") { _ in
+            asyncDone = true
+            expectation.fulfill()
+        }
+
+        let start = Date()
+        _ = resolver.resolve(host: "example.invalid", timeout: 3.0)
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 2.5, "sync resolve must not wait out its timeout behind a queued async resolve (took \(elapsed)s)")
+
+        wait(for: [expectation], timeout: 10)
+        XCTAssertTrue(asyncDone)
+    }
+
+    func testIPLiteralsResolveSynchronouslyWithoutNetwork() {
+        let resolver = ProxyEndpointResolver.shared
+        XCTAssertEqual(resolver.resolve(host: "192.0.2.1"), ["192.0.2.1"])
+        XCTAssertEqual(resolver.resolve(host: "2001:db8::1"), ["2001:db8::1"])
+        XCTAssertEqual(resolver.resolve(host: ""), [])
+    }
+}
+
+// MARK: - TunnelError mapping
+
+final class TunnelErrorTests: XCTestCase {
+
+    func testProviderCodeMapping() {
+        XCTAssertEqual(TunnelError.provider(code: 100, message: "x"), .invalidConfiguration)
+        XCTAssertEqual(TunnelError.provider(code: 101, message: "x"), .invalidConfiguration)
+        XCTAssertEqual(TunnelError.provider(code: 102, message: "x"), .invalidConfiguration)
+        XCTAssertEqual(TunnelError.provider(code: 3, message: "x"), .tunSetupFailed(detail: "x"))
+        XCTAssertEqual(TunnelError.provider(code: 4, message: "x"), .unknown(code: 4, detail: "x"))
+        XCTAssertEqual(TunnelError.provider(code: 5, message: "x"), .probeFailed(detail: "x"))
+        XCTAssertEqual(TunnelError.provider(code: 6, message: "x"), .proxyUnavailable(detail: "x"))
+        XCTAssertEqual(TunnelError.provider(code: 7, message: "x"), .resourceLimit(detail: "x"))
+        XCTAssertEqual(TunnelError.provider(code: 99, message: "y"), .unknown(code: 99, detail: "y"))
+    }
+
+    func testAsNSErrorPreservesCodes() {
+        let nsError = TunnelError.engineExited(code: 42).asNSError(domain: "Tunnexa.Provider")
+        XCTAssertEqual(nsError.domain, "Tunnexa.Provider")
+        XCTAssertEqual(nsError.code, 4)
+        XCTAssertEqual(nsError.userInfo["TunnexaEngineExitCode"] as? NSNumber, NSNumber(value: 42))
+        XCTAssertNotNil(nsError.userInfo[NSLocalizedDescriptionKey])
+
+        let nativeError = TunnelError.nativeInitializationFailed(code: 1, detail: "boom").asNSError()
+        XCTAssertEqual(nativeError.code, 1)
+        XCTAssertEqual(nativeError.userInfo["TunnexaNativeErrorCode"] as? NSNumber, NSNumber(value: 1))
+    }
+
+    func testPOSIXDescriptions() {
+        XCTAssertEqual(POSIXErrorDiagnostics.describe(errno: EMFILE), "EMFILE: Too many open files")
+        XCTAssertEqual(POSIXErrorDiagnostics.describe(errno: EADDRINUSE), "EADDRINUSE: Address already in use")
+        XCTAssertNil(POSIXErrorDiagnostics.describe(errno: 9999))
     }
 }

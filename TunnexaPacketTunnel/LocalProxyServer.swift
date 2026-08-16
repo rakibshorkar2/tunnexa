@@ -179,6 +179,34 @@ public enum NetworkAddressMatcher {
 
 // MARK: - Local SOCKS5 Dispatcher
 
+/// Resource limits for the dispatcher. Production defaults are sized for the
+/// PacketTunnel process (which runs under iOS jetsam/descriptor limits); tests
+/// inject smaller values.
+public struct ProxyLimits {
+    /// Hard cap on concurrent TCP client connections. Beyond this, new
+    /// connections are closed immediately (never queued unboundedly).
+    public var maxConnections: Int = 512
+    /// Hard cap on concurrent UDP ASSOCIATE sessions.
+    public var maxUDPAssociations: Int = 128
+    /// Hard cap on distinct direct-UDP destinations per association (each
+    /// spawns its own NWConnection).
+    public var maxDirectRelays: Int = 32
+    /// Time allowed to complete the SOCKS5 handshake (greeting → request).
+    /// Clients that stall are disconnected, never held forever.
+    public var handshakeTimeout: TimeInterval = 10.0
+    /// Maximum accepted SOCKS5 domain length (wire format caps at 255).
+    public let maxDomainLength: Int = 255
+
+    public init() {}
+
+    public init(maxConnections: Int, maxUDPAssociations: Int, maxDirectRelays: Int, handshakeTimeout: TimeInterval) {
+        self.maxConnections = maxConnections
+        self.maxUDPAssociations = maxUDPAssociations
+        self.maxDirectRelays = maxDirectRelays
+        self.handshakeTimeout = handshakeTimeout
+    }
+}
+
 /// Loopback SOCKS5 dispatcher used by the Packet Tunnel.
 ///
 /// Wire-format contract:
@@ -206,6 +234,7 @@ public enum NetworkAddressMatcher {
 public final class LocalProxyServer {
 
     public let port: UInt16
+    public let limits: ProxyLimits
     private let settings: SharedSettings
     private let credentialStore: CredentialStore
     private var listener: NWListener?
@@ -225,6 +254,9 @@ public final class LocalProxyServer {
     private let listenerQueue = DispatchQueue(label: "com.rakib.tunnexa.localproxy.listener")
     private var connectionCounter = 0
     private var activeConnections: [ObjectIdentifier: NWConnection] = [:]
+    /// Handshake deadlines, keyed by connection id. Access serialized on
+    /// `stateQueue`.
+    private var handshakeDeadlines: [ObjectIdentifier: ConnectionDeadline] = [:]
 
     // Load-balancer state.
     private var loadBalanceIndices: [String: Int] = [:]
@@ -235,20 +267,37 @@ public final class LocalProxyServer {
     private var udpAssociations: [ObjectIdentifier: UDPAssociation] = [:]
     private let udpQueue = DispatchQueue(label: "com.rakib.tunnexa.localproxy.udp")
 
-    public init(port: UInt16, settings: SharedSettings, credentialStore: CredentialStore? = nil) {
+    // Configuration cache: the JSON blob is only re-decoded when the
+    // generation marker changes (selection strings are re-read cheaply on
+    // every request).
+    private var cachedConfig: ProxyConfiguration?
+    private var cachedGeneration: Int64 = -1
+    private let configQueue = DispatchQueue(label: "com.rakib.tunnexa.localproxy.config")
+
+    public init(port: UInt16, settings: SharedSettings, credentialStore: CredentialStore? = nil, limits: ProxyLimits = ProxyLimits()) {
         self.port = port
         self.settings = settings
         self.credentialStore = credentialStore ?? KeychainHelper.shared
+        self.limits = limits
         loadConfig()
     }
 
     // MARK: - Configuration
 
+    /// Reloads the configuration when its generation changed. Cheap when the
+    /// snapshot is unchanged (no JSON decode, no rule re-parse).
     public func loadConfig() {
-        config = settings.loadConfiguration()
-        selectedProxyName = settings.selectedProxyName
-        selectedGroupName = settings.selectedGroupName
-        resetLoadBalancerIfNeeded()
+        let generation = settings.configurationGeneration
+        configQueue.sync {
+            if cachedConfig == nil || cachedGeneration != generation {
+                cachedConfig = settings.loadConfiguration()
+                cachedGeneration = generation
+                config = cachedConfig
+                resetLoadBalancerIfNeeded()
+            }
+            selectedProxyName = settings.selectedProxyName
+            selectedGroupName = settings.selectedGroupName
+        }
     }
 
     // MARK: - Lifecycle
@@ -260,6 +309,8 @@ public final class LocalProxyServer {
         guard listener == nil else { return }
 
         let parameters = NWParameters.tcp
+        // Security: loopback only — the dispatcher is never reachable from the
+        // LAN, only from this process (and the tunnel's local traffic).
         parameters.requiredInterfaceType = .loopback
 
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
@@ -312,10 +363,16 @@ public final class LocalProxyServer {
             }
             udpAssociations.removeAll()
         }
-        for connection in activeConnections.values {
-            connection.cancel()
+        stateQueue.sync {
+            for connection in activeConnections.values {
+                connection.cancel()
+            }
+            activeConnections.removeAll()
+            for deadline in handshakeDeadlines.values {
+                deadline.markCompleted()
+            }
+            handshakeDeadlines.removeAll()
         }
-        activeConnections.removeAll()
         SharedLogging.log("Local SOCKS5 Dispatcher stopped.", category: .routing)
     }
 
@@ -324,21 +381,104 @@ public final class LocalProxyServer {
     private func handleNewConnection(_ connection: NWConnection) {
         connectionCounter += 1
         let id = ObjectIdentifier(connection)
+
+        // Hard connection cap: reject (close) beyond the limit instead of
+        // accumulating unbounded NWConnection objects.
+        let atCapacity: Bool = stateQueue.sync {
+            if activeConnections.count >= limits.maxConnections {
+                return true
+            }
+            activeConnections[id] = connection
+            return false
+        }
+        guard !atCapacity else {
+            SharedLogging.log("Dispatcher connection limit reached (\(limits.maxConnections)); rejecting new connection.", category: .routing, level: .warning)
+            connection.cancel()
+            return
+        }
+
         let connectionQueue = DispatchQueue(label: "com.rakib.tunnexa.localproxy.conn.\(connectionCounter)")
-        activeConnections[id] = connection
+
+        // Handshake deadline: a client that connects but never completes the
+        // SOCKS5 handshake is disconnected after `handshakeTimeout`.
+        let deadline = ConnectionDeadline()
+        deadline.arm(after: limits.handshakeTimeout, queue: connectionQueue) { [weak self] in
+            SharedLogging.log("Handshake timed out for a dispatcher client.", category: .routing, level: .warning)
+            connection.cancel()
+        }
+        stateQueue.sync {
+            handshakeDeadlines[id] = deadline
+        }
 
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .cancelled:
-                self?.activeConnections.removeValue(forKey: id)
-            case .failed:
-                self?.activeConnections.removeValue(forKey: id)
+            case .cancelled, .failed:
+                self?.removeConnectionState(id: id)
             default:
                 break
             }
         }
         connection.start(queue: connectionQueue)
         readGreeting(connection, queue: connectionQueue)
+    }
+
+    private func removeConnectionState(id: ObjectIdentifier) {
+        stateQueue.sync {
+            activeConnections.removeValue(forKey: id)
+            handshakeDeadlines.removeValue(forKey: id)?.markCompleted()
+        }
+    }
+
+    /// Completes the handshake for `connection` (deadline disarmed). Called
+    /// from every handshake-terminal path.
+    private func markHandshakeComplete(_ connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        stateQueue.sync {
+            handshakeDeadlines.removeValue(forKey: id)?.markCompleted()
+        }
+    }
+
+    /// One-shot deadline for a single client connection.
+    ///
+    /// `arm` runs on the listener queue; the timer fires on the connection
+    /// queue; `markCompleted` may be called from the state queue. A lock
+    /// serializes access so a completed handshake can never race a pending
+    /// timeout into a spurious disconnect.
+    private final class ConnectionDeadline {
+        private let lock = NSLock()
+        private var timer: DispatchSourceTimer?
+        private var completed = false
+
+        func arm(after interval: TimeInterval, queue: DispatchQueue, onTimeout: @escaping () -> Void) {
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + interval)
+            timer.setEventHandler { [weak self] in
+                guard let self = self else { return }
+                var shouldFire = false
+                self.lock.lock()
+                if !self.completed {
+                    self.timer = nil
+                    shouldFire = true
+                }
+                self.lock.unlock()
+                if shouldFire {
+                    onTimeout()
+                }
+            }
+            lock.lock()
+            self.timer = timer
+            lock.unlock()
+            timer.resume()
+        }
+
+        func markCompleted() {
+            lock.lock()
+            let timer = self.timer
+            self.timer = nil
+            completed = true
+            lock.unlock()
+            timer?.cancel()
+        }
     }
 
     // MARK: Greeting (RFC 1928)
@@ -992,6 +1132,7 @@ public final class LocalProxyServer {
     /// BND is 127.0.0.1:0 for CONNECT (we do not maintain a bound address),
     /// or 127.0.0.1:<relayPort> for UDP ASSOCIATE.
     private func sendReply(_ connection: NWConnection, code: UInt8, relayPort: UInt16? = nil) {
+        markHandshakeComplete(connection)
         var reply = Data([5, code, 0, 1, 127, 0, 0, 1])
         let boundPort = relayPort ?? 0
         reply.append(UInt8((boundPort >> 8) & 0xFF))
@@ -1002,6 +1143,9 @@ public final class LocalProxyServer {
     // MARK: - Data bridge (TCP)
 
     private func bridgeConnections(_ conn1: NWConnection, _ conn2: NWConnection, queue: DispatchQueue) {
+        // Handshake is over; the data phase begins. The deadline is disarmed
+        // so idle-but-established connections are never cut by it.
+        markHandshakeComplete(conn1)
         pipe(from: conn1, to: conn2, queue: queue)
         pipe(from: conn2, to: conn1, queue: queue)
     }
@@ -1044,13 +1188,26 @@ public final class LocalProxyServer {
             SharedLogging.log("UDP association failed: \(reason)", category: .routing, level: .error)
             sendReply(clientConnection, code: 0x01)
         case .direct, .proxy:
+            let associationID = ObjectIdentifier(clientConnection)
+            // Hard cap on concurrent UDP associations.
+            let atCapacity = udpQueue.sync { () -> Bool in
+                if udpAssociations.count >= limits.maxUDPAssociations {
+                    return true
+                }
+                return false
+            }
+            guard !atCapacity else {
+                SharedLogging.log("UDP association limit reached (\(limits.maxUDPAssociations)); rejecting association.", category: .routing, level: .warning)
+                sendReply(clientConnection, code: 0x01)
+                return
+            }
+
             do {
                 let parameters = NWParameters.udp
                 parameters.requiredInterfaceType = .loopback
                 let udpListener = try NWListener(using: parameters, on: .any)
 
-                let association = UDPAssociation(clientConnection: clientConnection, route: route, credentialStore: credentialStore)
-                let associationID = ObjectIdentifier(clientConnection)
+                let association = UDPAssociation(clientConnection: clientConnection, route: route, credentialStore: credentialStore, maxDirectRelays: limits.maxDirectRelays)
                 udpQueue.sync {
                     udpAssociations[associationID] = association
                 }
@@ -1071,6 +1228,10 @@ public final class LocalProxyServer {
                     switch state {
                     case .cancelled, .failed:
                         self?.teardownUDPAssociation(id: associationID, listener: udpListener)
+                        // The original handler was replaced; clean up the
+                        // connection bookkeeping here too, or UDP clients
+                        // leak slots in the connection cap forever.
+                        self?.removeConnectionState(id: associationID)
                     default:
                         break
                     }
@@ -1231,6 +1392,7 @@ private final class UDPAssociation {
     let clientConnection: NWConnection
     let credentialStore: CredentialStore
     private let idleTimeout: TimeInterval = 60.0
+    private let maxDirectRelays: Int
 
     var route: RouteResolution = .blocked
 
@@ -1241,10 +1403,11 @@ private final class UDPAssociation {
     private var lastActivity = Date()
     private let lock = NSLock()
 
-    init(clientConnection: NWConnection, route: RouteResolution, credentialStore: CredentialStore) {
+    init(clientConnection: NWConnection, route: RouteResolution, credentialStore: CredentialStore, maxDirectRelays: Int = 32) {
         self.clientConnection = clientConnection
         self.route = route
         self.credentialStore = credentialStore
+        self.maxDirectRelays = maxDirectRelays
     }
 
     func attach(_ udpConnection: NWConnection) {
@@ -1294,34 +1457,46 @@ private final class UDPAssociation {
     func sendDirect(payload: Data, host: String, port: Int, sourceConnection: NWConnection, queue: DispatchQueue) {
         touchActivity()
         let key = "\(host):\(port)"
-        var relay: NWConnection?
-        lock.lock()
-        relay = directRelays[key]
-        lock.unlock()
-
-        if let existing = relay {
-            sendDirectDatagram(existing, payload: payload, sourceConnection: sourceConnection, host: host, port: port, queue: queue)
-            return
-        }
 
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { return }
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: nwPort)
-        let newRelay = NWConnection(to: endpoint, using: .udp)
+
+        // Bound the number of distinct direct destinations per association:
+        // each one owns an NWConnection and a receive loop. Check-and-insert
+        // happens under a single lock scope to avoid over-allocation races.
+        var relay: NWConnection?
+        var created = false
         lock.lock()
-        directRelays[key] = newRelay
+        relay = directRelays[key]
+        if relay == nil {
+            guard directRelays.count < maxDirectRelays else {
+                lock.unlock()
+                SharedLogging.log("UDP direct-relay destination limit reached (\(maxDirectRelays)); dropping datagram to \(host):\(port).", category: .routing, level: .warning)
+                return
+            }
+            let newRelay = NWConnection(to: endpoint, using: .udp)
+            directRelays[key] = newRelay
+            relay = newRelay
+            created = true
+        }
         lock.unlock()
 
-        newRelay.stateUpdateHandler = { [weak self] state in
-            guard let self = self else { return }
-            if case .ready = state {
-                self.sendDirectDatagram(newRelay, payload: payload, sourceConnection: sourceConnection, host: host, port: port, queue: queue)
-            } else if case .failed = state {
-                self.lock.lock()
-                self.directRelays.removeValue(forKey: key)
-                self.lock.unlock()
+        guard let chosen = relay else { return }
+        if created {
+            chosen.stateUpdateHandler = { [weak self] state in
+                guard let self = self else { return }
+                if case .ready = state {
+                    self.sendDirectDatagram(chosen, payload: payload, sourceConnection: sourceConnection, host: host, port: port, queue: queue)
+                } else if case .failed = state {
+                    self.lock.lock()
+                    self.directRelays.removeValue(forKey: key)
+                    self.lock.unlock()
+                }
             }
+            chosen.start(queue: queue)
+        } else {
+            sendDirectDatagram(chosen, payload: payload, sourceConnection: sourceConnection, host: host, port: port, queue: queue)
         }
-        newRelay.start(queue: queue)
     }
 
     private func sendDirectDatagram(_ relay: NWConnection, payload: Data, sourceConnection: NWConnection, host: String, port: Int, queue: DispatchQueue) {

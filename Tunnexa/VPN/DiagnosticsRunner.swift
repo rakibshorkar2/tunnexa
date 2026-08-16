@@ -101,6 +101,9 @@ public enum DiagnosticsRunner {
         settingsSummary["MTU"] = settings.mtu.map { "\($0)" } ?? "default (\(MTULimit.defaultValue))"
         settingsSummary["Local auth"] = settings.bool(SettingsKey.localAuthEnabled) ? "on" : "off"
         settingsSummary["In-app proxy"] = settings.inAppProxyEnabled ? "on" : "off"
+        settingsSummary["Configuration generation"] = "\(settings.configurationGeneration)"
+        settingsSummary["Tunnel session"] = settings.sessionID(key: SettingsKey.tunnelSessionID) ?? "-"
+        settingsSummary["Engine session"] = settings.sessionID(key: SettingsKey.engineSessionID) ?? "-"
 
         return DiagnosticsBundle(
             generatedAt: Date(),

@@ -39,6 +39,23 @@ public enum YAMLParsingError: Error, LocalizedError, Equatable {
     }
 }
 
+// MARK: - Resource limits
+
+/// Hard bounds for imported documents. Parsing a hostile or accidental huge
+/// file must never exhaust memory or hang the import UI.
+public enum YAMLLimits {
+    /// Maximum accepted document size (bytes, UTF-8).
+    public static let maxDocumentBytes = 512 * 1024
+    /// Maximum accepted length of a single source line.
+    public static let maxLineLength = 8192
+    /// Maximum number of proxies.
+    public static let maxProxies = 512
+    /// Maximum number of proxy groups.
+    public static let maxGroups = 256
+    /// Maximum number of rules.
+    public static let maxRules = 4096
+}
+
 // MARK: - Import summary
 
 /// Everything the importer learned from a YAML document, including skipped
@@ -110,6 +127,9 @@ public class YAMLParser {
     }
 
     public static func parseDetailed(_ content: String) throws -> YAMLImportSummary {
+        guard content.utf8.count <= YAMLLimits.maxDocumentBytes else {
+            throw YAMLParsingError.invalidStructure(line: 1, message: "Document exceeds the \(YAMLLimits.maxDocumentBytes) byte limit.")
+        }
         let lines = try tokenize(content)
         guard !lines.isEmpty else {
             throw YAMLParsingError.missingProxiesSection
@@ -138,6 +158,9 @@ public class YAMLParser {
             // Tabs are never legal YAML indentation.
             if raw.hasPrefix("\t") {
                 throw YAMLParsingError.invalidStructure(line: lineNumber, message: "Tab characters are not allowed for indentation.")
+            }
+            if raw.count > YAMLLimits.maxLineLength {
+                throw YAMLParsingError.invalidStructure(line: lineNumber, message: "Line exceeds the \(YAMLLimits.maxLineLength) character limit.")
             }
             let indent = raw.prefix(while: { $0 == " " }).count
             let content = String(raw.dropFirst(indent)).trimmingCharacters(in: .whitespaces)
@@ -190,6 +213,16 @@ public class YAMLParser {
         return nil
     }
 
+    /// Inserts a key into a mapping, rejecting duplicates with a precise line
+    /// number. YAML semantics say the last duplicate wins, but silently
+    /// overwriting config values invites misconfiguration — reject instead.
+    private static func insertUniqueKey(into mapping: inout [String: YAMLNode], key: String, node: YAMLNode, line: Int) throws {
+        guard mapping[key] == nil else {
+            throw YAMLParsingError.invalidStructure(line: line, message: "Duplicate key '\(key)'.")
+        }
+        mapping[key] = node
+    }
+
     private static func parseMapping(_ lines: [Line], at start: Int, indent: Int) throws -> (YAMLValue, Int) {
         var mapping: [String: YAMLNode] = [:]
         var i = start
@@ -212,13 +245,13 @@ public class YAMLParser {
                 // Nested block or empty value.
                 if i < lines.count, lines[i].indent > indent {
                     let (nested, next) = try parseBlock(lines, at: i, indent: lines[i].indent)
-                    mapping[key] = YAMLNode(value: nested)
+                    try insertUniqueKey(into: &mapping, key: key, node: YAMLNode(value: nested), line: line.number)
                     i = next
                 } else {
-                    mapping[key] = YAMLNode(value: .scalar("", line: line.number))
+                    try insertUniqueKey(into: &mapping, key: key, node: YAMLNode(value: .scalar("", line: line.number)), line: line.number)
                 }
             } else {
-                mapping[key] = YAMLNode(value: .scalar(parseScalar(split.value, lineNumber: line.number), line: line.number))
+                try insertUniqueKey(into: &mapping, key: key, node: YAMLNode(value: .scalar(parseScalar(split.value, lineNumber: line.number), line: line.number)), line: line.number)
                 // A value was provided inline; any deeper content is an error.
                 if i < lines.count, lines[i].indent > indent {
                     throw YAMLParsingError.invalidStructure(line: lines[i].number, message: "Unexpected indentation below scalar value for key '\(key)'.")
@@ -264,13 +297,13 @@ public class YAMLParser {
                 if split.value.isEmpty {
                     if i < lines.count, lines[i].indent > indent {
                         let (nested, next) = try parseBlock(lines, at: i, indent: lines[i].indent)
-                        item[firstKey] = YAMLNode(value: nested)
+                        try insertUniqueKey(into: &item, key: firstKey, node: YAMLNode(value: nested), line: itemLine)
                         i = next
                     } else {
-                        item[firstKey] = YAMLNode(value: .scalar("", line: itemLine))
+                        try insertUniqueKey(into: &item, key: firstKey, node: YAMLNode(value: .scalar("", line: itemLine)), line: itemLine)
                     }
                 } else {
-                    item[firstKey] = YAMLNode(value: .scalar(firstValue, line: itemLine))
+                    try insertUniqueKey(into: &item, key: firstKey, node: YAMLNode(value: .scalar(firstValue, line: itemLine)), line: itemLine)
                 }
 
                 // Continuation keys.
@@ -285,13 +318,13 @@ public class YAMLParser {
                     if nextSplit.value.isEmpty {
                         if i < lines.count, lines[i].indent > nextLine.indent {
                             let (nested, next) = try parseBlock(lines, at: i, indent: lines[i].indent)
-                            item[key] = YAMLNode(value: nested)
+                            try insertUniqueKey(into: &item, key: key, node: YAMLNode(value: nested), line: nextLine.number)
                             i = next
                         } else {
-                            item[key] = YAMLNode(value: .scalar("", line: nextLine.number))
+                            try insertUniqueKey(into: &item, key: key, node: YAMLNode(value: .scalar("", line: nextLine.number)), line: nextLine.number)
                         }
                     } else {
-                        item[key] = YAMLNode(value: .scalar(parseScalar(nextSplit.value, lineNumber: nextLine.number), line: nextLine.number))
+                        try insertUniqueKey(into: &item, key: key, node: YAMLNode(value: .scalar(parseScalar(nextSplit.value, lineNumber: nextLine.number), line: nextLine.number)), line: nextLine.number)
                         if i < lines.count, lines[i].indent > nextLine.indent {
                             throw YAMLParsingError.invalidStructure(line: lines[i].number, message: "Unexpected indentation below scalar value for key '\(key)'.")
                         }
@@ -366,6 +399,10 @@ public class YAMLParser {
         var proxies: [SOCKS5Proxy] = []
         var proxyNames = Set<String>()
         for node in proxyItems {
+            if proxies.count + skippedProxies >= YAMLLimits.maxProxies {
+                issues.append(YAMLValidationIssue(line: node.line, field: "proxies", reason: "Too many proxies (limit \(YAMLLimits.maxProxies))."))
+                break
+            }
             guard let mapping = node.mapping else {
                 issues.append(YAMLValidationIssue(line: node.line, field: "proxies", reason: "Proxy entry must be a mapping (name/type/server/port)."))
                 continue
@@ -406,6 +443,10 @@ public class YAMLParser {
         var groupNames = Set<String>()
         if let groupItems = groupsNode?.sequence {
             for node in groupItems {
+                if groups.count >= YAMLLimits.maxGroups {
+                    issues.append(YAMLValidationIssue(line: node.line, field: "proxy-groups", reason: "Too many proxy groups (limit \(YAMLLimits.maxGroups))."))
+                    break
+                }
                 guard let mapping = node.mapping else {
                     issues.append(YAMLValidationIssue(line: node.line, field: "proxy-groups", reason: "Group entry must be a mapping (name/type/proxies)."))
                     continue
@@ -448,6 +489,10 @@ public class YAMLParser {
         var rules: [Rule] = []
         if let ruleItems = rulesNode?.sequence {
             for node in ruleItems {
+                if rules.count + skippedRules >= YAMLLimits.maxRules {
+                    issues.append(YAMLValidationIssue(line: node.line, field: "rules", reason: "Too many rules (limit \(YAMLLimits.maxRules))."))
+                    break
+                }
                 guard let scalar = node.scalar else {
                     issues.append(YAMLValidationIssue(line: node.line, field: "rules", reason: "Rule must be a quoted or unquoted string."))
                     continue

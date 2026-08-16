@@ -31,6 +31,14 @@ public enum SettingsKey {
     // Configuration
     public static let proxyConfig = "proxy_config"
     public static let configSchemaVersion = "config_schema_version"
+    /// Monotonically increasing commit marker, bumped on every configuration
+    /// save so the tunnel can detect a fresh snapshot without re-decoding the
+    /// JSON blob. Written AFTER the config blob (commit marker semantics).
+    public static let configurationGeneration = "config_generation"
+
+    // Diagnostic session correlation (written by the tunnel, read by the app)
+    public static let tunnelSessionID = "diag_tunnel_session"
+    public static let engineSessionID = "diag_engine_session"
 
     // Statistics (written by the tunnel, read by the app)
     public static let statUploadBytes = "stat_upload_bytes"
@@ -47,7 +55,11 @@ public enum SettingsKey {
 public enum MTULimit {
     public static let minimum = 1280
     public static let maximum = 9000
-    public static let defaultValue = 9000
+    /// Default MTU. 1500 is the de-facto Ethernet/Wi-Fi frame size and matches
+    /// Apple's own default for packet tunnels; larger values (e.g. 9000 jumbo
+    /// frames) can trigger fragmentation / PMTU black-holes on real networks,
+    /// so they are opt-in only.
+    public static let defaultValue = 1500
 
     public static func isValid(_ value: Int) -> Bool {
         return value >= minimum && value <= maximum
@@ -197,6 +209,27 @@ public struct SharedSettings {
 
     // MARK: Configuration blob
 
+    /// The current configuration generation, or 0 when never saved. Strictly
+    /// increasing across saves; consumers treat any change as "reload now".
+    public var configurationGeneration: Int64 {
+        get { int64(SettingsKey.configurationGeneration) }
+        set { set(newValue, forKey: SettingsKey.configurationGeneration) }
+    }
+
+    /// Generates a fresh session identifier (UUID string) for diagnostic
+    /// correlation, or returns the stored one when it is still current.
+    public func newSessionID(key: String) -> String {
+        let id = UUID().uuidString
+        set(id, forKey: key)
+        return id
+    }
+
+    /// Read-only access to the last written session identifier (diagnostics
+    /// must never rotate it).
+    public func sessionID(key: String) -> String? {
+        return string(key)
+    }
+
     public func loadConfiguration() -> ProxyConfiguration? {
         guard let data = data(SettingsKey.proxyConfig),
               let config = try? JSONDecoder().decode(ProxyConfiguration.self, from: data) else {
@@ -209,7 +242,11 @@ public struct SharedSettings {
     public func saveConfiguration(_ config: ProxyConfiguration) -> Bool {
         do {
             let data = try JSONEncoder().encode(config)
+            // Config blob first, generation second (commit marker): a reader
+            // that sees the new generation is guaranteed to also see the new
+            // blob, never a torn half-updated snapshot.
             set(data, forKey: SettingsKey.proxyConfig)
+            configurationGeneration = configurationGeneration + 1
             return true
         } catch {
             SharedLogging.log("Failed to encode configuration: \(error.localizedDescription)", category: .vpn, level: .error)

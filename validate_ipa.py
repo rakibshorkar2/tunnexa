@@ -106,6 +106,56 @@ def is_macho(path: str) -> bool:
         return False
 
 
+def macho_architectures(path: str) -> list:
+    """Architectures a Mach-O binary contains (cross-platform, no otool).
+
+    Reads the Mach-O header(s) and the LC_BUILD_VERSION / LC_VERSION_MIN_*
+    load commands. Returns e.g. ["arm64"], ["x86_64"], or an empty list when
+    the layout is unrecognized.
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return []
+    if len(data) < 32:
+        return []
+
+    # Fat (universal) binaries: FAT_MAGIC / FAT_CIGAM.
+    fat = data[:4]
+    if fat == b"\xca\xfe\xba\xbe" or fat == b"\xbe\xba\xfe\xca":
+        big_endian = fat == b"\xca\xfe\xba\xbe"
+        nfat_arch = int.from_bytes(data[4:8], "big" if big_endian else "little")
+        archs: list = []
+        for index in range(min(nfat_arch, 64)):
+            offset = 8 + index * 20
+            if offset + 20 > len(data):
+                break
+            cputype = int.from_bytes(
+                data[offset:offset + 4], "big" if big_endian else "little", signed=True
+            )
+            archs.append(cputype_name(cputype))
+        return archs
+
+    # Thin binaries: MH_MAGIC/MH_CIGAM (32-bit) or MH_MAGIC_64/MH_CIGAM_64.
+    magic = int.from_bytes(data[:4], "little")
+    if magic not in (0xFEEDFACE, 0xFEEDFACF, 0xCEFAEDFE, 0xCFFAEDFE):
+        return []
+    cputype = int.from_bytes(data[4:8], "little", signed=True)
+    return [cputype_name(cputype)]
+
+
+def cputype_name(cputype: int) -> str:
+    # cputype from mach/machine.h (CPU_TYPE_*).
+    cpu_arch_abi64 = 0x01000000
+    base = cputype & ~cpu_arch_abi64
+    if base == 7:  # CPU_TYPE_X86
+        return "x86_64" if cputype & cpu_arch_abi64 else "i386"
+    if base == 12:  # CPU_TYPE_ARM
+        return "arm64" if cputype & cpu_arch_abi64 else "arm"
+    return f"cputype_{cputype}"
+
+
 # ---------------------------------------------------------------------------
 # macOS-only real tooling checks
 # ---------------------------------------------------------------------------
@@ -267,6 +317,15 @@ def validate_app(app_path: str, expect_unsigned: bool) -> bool:
         ok(f"Main app executable '{main_executable}' present ({size:,} bytes)")
         if not is_macho(main_executable_path):
             fail("Main executable is not a Mach-O binary")
+        else:
+            archs = macho_architectures(main_executable_path)
+            if archs:
+                ok(f"Main executable architectures: {', '.join(archs)}")
+                for arch in archs:
+                    if arch not in ("arm64", "x86_64", "arm64e"):
+                        fail(f"Main executable contains unexpected architecture: {arch}")
+            else:
+                note("Main executable architecture not identified (unrecognized Mach-O layout).")
     else:
         fail(f"Main app executable '{main_executable}' NOT found at {main_executable_path}")
 
@@ -343,6 +402,15 @@ def validate_app(app_path: str, expect_unsigned: bool) -> bool:
         ok(f"Extension executable '{ext_executable_name}' present ({size:,} bytes)")
         if not is_macho(ext_executable_path):
             fail("Extension executable is not a Mach-O binary")
+        else:
+            ext_archs = macho_architectures(ext_executable_path)
+            if ext_archs:
+                ok(f"Extension executable architectures: {', '.join(ext_archs)}")
+                for arch in ext_archs:
+                    if arch not in ("arm64", "x86_64", "arm64e"):
+                        fail(f"Extension executable contains unexpected architecture: {arch}")
+            else:
+                note("Extension executable architecture not identified (unrecognized Mach-O layout).")
     else:
         fail(f"Extension executable '{ext_executable_name}' NOT found at {ext_executable_path}")
 
@@ -378,6 +446,24 @@ def validate_app(app_path: str, expect_unsigned: bool) -> bool:
     return False
 
 
+def source_entitlements() -> dict:
+    """The entitlement declarations the targets compile with (repo source).
+
+    An unsigned CI archive embeds no entitlements — these values are what a
+    future signing step would embed, and the CI verifies they declare the
+    expected App Group + packet-tunnel-provider.
+    """
+    for path in ("Tunnexa/Tunnexa.entitlements",
+                 "TunnexaPacketTunnel/TunnexaPacketTunnel.entitlements"):
+        if os.path.isfile(path):
+            try:
+                with open(path, "rb") as f:
+                    return plistlib.load(f)
+            except Exception:
+                return {}
+    return {}
+
+
 def extract_ipa(ipa_path: str) -> str:
     tmpdir = tempfile.mkdtemp(prefix="tunnexa_validate_")
     with zipfile.ZipFile(ipa_path, "r") as zf:
@@ -406,6 +492,11 @@ def main():
         action="store_true",
         help="CI artifacts are unsigned by design; report as expected.",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON summary in addition to the human report.",
+    )
     args = parser.parse_args()
 
     tmpdir = None
@@ -422,6 +513,52 @@ def main():
                 sys.exit(1)
 
         passed = validate_app(app_path, expect_unsigned=args.expect_unsigned)
+
+        if args.json:
+            import json
+            main_plist = read_plist(os.path.join(app_path, "Info.plist"))
+            ext_path = os.path.join(app_path, "PlugIns", "TunnexaPacketTunnel.appex")
+            ext_plist = read_plist(os.path.join(ext_path, "Info.plist")) if os.path.isdir(ext_path) else {}
+            source_ents = source_entitlements()
+            ext_ns_extension = ext_plist.get("NSExtension", {})
+            summary = {
+                "valid": bool(passed),
+                "failures": FAILURES,
+                "bundle_path": app_path,
+                "bundle_ids": {
+                    "app": main_plist.get("CFBundleIdentifier", ""),
+                    "extension": ext_plist.get("CFBundleIdentifier", ""),
+                },
+                "extension_embedded": os.path.isdir(ext_path),
+                "extension_point": ext_ns_extension.get("NSExtensionPointIdentifier"),
+                "principal_class": ext_ns_extension.get("NSExtensionPrincipalClass"),
+                "signing": {
+                    "app_signed": is_bundle_signed(app_path),
+                    "extension_signed": is_bundle_signed(ext_path),
+                },
+                "entitlements": {
+                    "embedded_in_archive": is_bundle_signed(app_path),
+                    "source_application_groups": (source_ents or {}).get(
+                        "com.apple.security.application-groups", []
+                    ),
+                    "source_networkextension": (source_ents or {}).get(
+                        "com.apple.developer.networking.networkextension", []
+                    ),
+                    "note": "unsigned CI artifact embeds no entitlements; "
+                            "source values are what signing would embed",
+                },
+                "architectures": {"app": [], "extension": []},
+            }
+            main_executable = main_plist.get("CFBundleExecutable", "Tunnexa")
+            summary["architectures"]["app"] = macho_architectures(
+                os.path.join(app_path, main_executable)
+            )
+            ext_executable = ext_plist.get("CFBundleExecutable", "TunnexaPacketTunnel")
+            summary["architectures"]["extension"] = macho_architectures(
+                os.path.join(ext_path, ext_executable)
+            )
+            print(json.dumps(summary, indent=2))
+
         sys.exit(0 if passed else 1)
     finally:
         if tmpdir and os.path.isdir(tmpdir):

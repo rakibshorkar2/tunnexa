@@ -1,5 +1,16 @@
 import Foundation
 
+/// Abstraction over the engine loop so tests can drive lifecycle behavior
+/// (early exit, stop requests, restart) without a real tun2socks process.
+public protocol TunnelBackend: AnyObject {
+    var isRunning: Bool { get }
+    var exitCode: Int32? { get }
+    var onExit: ((Int32) -> Void)? { get set }
+    var onStopRequested: (() -> Void)? { get set }
+    func start()
+    func stop(timeout: TimeInterval)
+}
+
 /// Owns the blocking engine loop.
 ///
 /// Responsibilities:
@@ -18,7 +29,7 @@ import Foundation
 /// externally supplied descriptor. This type (and the provider) therefore
 /// never opens, receives or closes a descriptor — doing so would tear down
 /// the packet flow while the tunnel is running.
-public final class TunnelEngine {
+public final class TunnelEngine: TunnelBackend {
 
     public typealias EngineRun = (String) -> Int32
 
@@ -111,6 +122,56 @@ public final class TunnelEngine {
     }
 }
 
+/// Scriptable backend for tests: lifecycle is driven manually (no thread, no
+/// real engine), so tests can exercise provider/manager reaction to an early
+/// engine exit or a stop request deterministically.
+public final class MockTunnelBackend: TunnelBackend {
+
+    private let lock = NSLock()
+    private var storedIsRunning = false
+    private var storedExitCode: Int32?
+
+    public var isRunning: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return storedIsRunning
+    }
+
+    public var exitCode: Int32? {
+        lock.lock(); defer { lock.unlock() }
+        return storedExitCode
+    }
+
+    public var onExit: ((Int32) -> Void)?
+    public var onStopRequested: (() -> Void)?
+    public private(set) var stopRequests = 0
+
+    public init() {}
+
+    public func start() {
+        lock.lock()
+        storedIsRunning = true
+        storedExitCode = nil
+        lock.unlock()
+    }
+
+    public func stop(timeout: TimeInterval = 5.0) {
+        lock.lock()
+        storedIsRunning = false
+        lock.unlock()
+        stopRequests += 1
+        onStopRequested?()
+    }
+
+    /// Simulates the engine loop exiting on its own (e.g. a crash).
+    public func simulateExit(code: Int32) {
+        lock.lock()
+        storedIsRunning = false
+        storedExitCode = code
+        lock.unlock()
+        onExit?(code)
+    }
+}
+
 /// Polls `Socks5Tunnel.stats` at 1 Hz and persists totals to the shared
 /// defaults so the app can display live traffic figures.
 ///
@@ -120,10 +181,11 @@ public final class TunnelEngine {
 public final class TunnelStatsSampler {
 
     private let settings: SharedSettings
-    private var timer: Timer?
+    private var timer: DispatchSourceTimer?
     private var lastUploadBytes: Int64 = 0
     private var lastDownloadBytes: Int64 = 0
     private let lock = NSLock()
+    private let queue = DispatchQueue(label: "com.rakib.tunnexa.stats", qos: .utility)
 
     /// Injected engine counter source (up, down) in bytes. The provider wires
     /// `Socks5Tunnel.stats`; tests may leave it nil (then sampling is a no-op).
@@ -142,18 +204,19 @@ public final class TunnelStatsSampler {
         lastUploadBytes = settings.int64(SettingsKey.statUploadBytes)
         lastDownloadBytes = settings.int64(SettingsKey.statDownloadBytes)
 
-        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.setEventHandler { [weak self] in
             self?.sample()
         }
-        timer.tolerance = 0.1
         self.timer = timer
         lock.unlock()
-        RunLoop.main.add(timer, forMode: .common)
+        timer.resume()
     }
 
     public func stop() {
         lock.lock()
-        timer?.invalidate()
+        timer?.cancel()
         timer = nil
         lock.unlock()
     }

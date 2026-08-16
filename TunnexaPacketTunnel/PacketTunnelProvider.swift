@@ -8,6 +8,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
     private var localProxy: LocalProxyServer?
     private var engine: TunnelEngine?
     private var statsSampler: TunnelStatsSampler?
+    private var sharedSettings: SharedSettings?
 
     /// Startup serialization: exactly one `completionHandler` call per tunnel
     /// session, even when several failure sources fire at once (engine exit +
@@ -15,39 +16,167 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
     /// because iOS reuses this provider instance across sessions.
     private let startup = StartupStateMachine()
 
+    /// All blocking startup work (proxy endpoint resolution, engine-alive
+    /// polling, the SOCKS5 probe) runs here instead of on the NE main thread,
+    /// which must stay responsive for `stopTunnel` and system requests.
+    private let startupQueue = DispatchQueue(label: "com.rakib.tunnexa.provider.startup")
+
+    /// True once startup settled successfully; drives the exclusion-refresh
+    /// timer and the stop path. Accessed only on `startupQueue`.
+    private var tunnelEstablished = false
+
+    /// Last applied proxy-endpoint exclusion set, used to diff before
+    /// re-applying tunnel settings. Accessed only on `startupQueue`.
+    private var lastExclusionSnapshot: (ipv4: [String], ipv6: [String])?
+
+    /// Re-resolves hostname proxy endpoints so routing stays correct when
+    /// their DNS answers change (fail-closed: only applied on actual change).
+    private var exclusionTimer: DispatchSourceTimer?
+
+    /// Guards teardown so concurrent failure paths (engine exit + probe
+    /// failure + stopTunnel) never run it twice.
+    private let teardownLock = NSLock()
+    private var isTearingDown = false
+
     public override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         SharedLogging.log("Starting Packet Tunnel Provider...", category: .vpn)
         startup.begin(handler: completionHandler)
 
         let settings = SharedSettings()
-        guard let config = settings.loadConfiguration() else {
-            finishStartup(providerError(code: 100, message: "No proxy configuration found in shared defaults."))
-            return
-        }
+        sharedSettings = settings
 
-        // Fail-closed: refuse to start a tunnel that cannot route anything.
-        guard config.hasUsableSelection else {
-            finishStartup(providerError(code: 101, message: "No proxies or groups configured. Import a configuration first."))
-            return
-        }
-        if !SharedSettings.hasValidSelection(config: config, selectedProxy: settings.selectedProxyName, selectedGroup: settings.selectedGroupName) {
-            finishStartup(providerError(code: 102, message: "The selected proxy is no longer available. Choose a proxy in the app and try again."))
-            return
-        }
+        // Per-session diagnostics correlation.
+        let sessionID = settings.newSessionID(key: SettingsKey.tunnelSessionID)
+        SharedLogging.log("Tunnel session \(sessionID) starting; configuration generation \(settings.configurationGeneration).", category: .vpn)
 
-        // 1. Tunnel network settings.
+        // Everything runs on `startupQueue`: DNS resolution (proxy endpoint
+        // exclusions), the engine-alive poll and the SOCKS5 probe would each
+        // block the NE main thread for seconds, and the system expects it to
+        // stay responsive.
+        startupQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            guard let config = settings.loadConfiguration() else {
+                self.finishStartup(TunnelError.provider(code: 100, message: "No proxy configuration found in shared defaults.").asNSError())
+                return
+            }
+
+            // Fail-closed: refuse to start a tunnel that cannot route anything.
+            guard config.hasUsableSelection else {
+                self.finishStartup(TunnelError.provider(code: 101, message: "No proxies or groups configured. Import a configuration first.").asNSError())
+                return
+            }
+            if !SharedSettings.hasValidSelection(config: config, selectedProxy: settings.selectedProxyName, selectedGroup: settings.selectedGroupName) {
+                self.finishStartup(TunnelError.provider(code: 102, message: "The selected proxy is no longer available. Choose a proxy in the app and try again.").asNSError())
+                return
+            }
+
+            // 1. Tunnel network settings, including the resolved proxy-endpoint
+            // exclusions (they prevent routing loops).
+            let tunnelSettings = self.buildTunnelSettings(
+                config: config,
+                settings: settings,
+                exclusions: self.resolvedProxyExclusions(config: config, isIPv6Enabled: settings.ipv6Enabled, budget: 2.0)
+            )
+
+            self.setTunnelNetworkSettings(tunnelSettings) { [weak self] error in
+                guard let self = self else { return }
+                if let error = error {
+                    SharedLogging.log("Failed to set tunnel network settings: \(error.localizedDescription)", category: .vpn, level: .error)
+                    self.finishStartup(error)
+                    return
+                }
+                // The completion may fire on any queue; all startup-affine
+                // state lives on `startupQueue`.
+                self.startupQueue.async {
+                    self.proceedAfterNetworkSettings(config: config, settings: settings)
+                }
+            }
+        }
+    }
+
+    /// Everything after the network settings are applied. Runs on
+    /// `startupQueue` (never the NE main thread). The startup only succeeds
+    /// once every component is verified:
+    ///  - the local dispatcher listener is actually `.ready`;
+    ///  - the engine thread is running and does not exit during startup;
+    ///  - the dispatcher answers a real SOCKS5 probe.
+    ///
+    /// The TUN descriptor is never touched by this code: `NEPacketTunnelFlow`
+    /// owns it, and `Socks5Tunnel.run(withConfig:)` discovers it itself.
+    /// Any failure tears everything down and reports the real error.
+    private func proceedAfterNetworkSettings(config: ProxyConfiguration, settings: SharedSettings) {
+
+        // 2. Local SOCKS5 dispatcher on 127.0.0.1.
+        let localPort: UInt16 = AppConfigConstants.localProxyPort
+        let dispatcher = LocalProxyServer(port: localPort, settings: settings)
+        dispatcher.hostResolver = { host, completion in
+            ProxyEndpointResolver.shared.resolve(host: host, completion: completion)
+        }
+        do {
+            try dispatcher.start()
+        } catch {
+            finishStartup(TunnelError.provider(code: 3, message: "Failed to start local SOCKS5 dispatcher: \(error.localizedDescription)").asNSError())
+            return
+        }
+        guard startup.isInProgress else { return }
+        localProxy = dispatcher
+
+        // 3. Engine.
+        let configYAML = EngineConfigBuilder.build(mtu: settings.mtuOrDefault, isIPv6Enabled: settings.ipv6Enabled, localPort: localPort)
+        let engineSessionID = settings.newSessionID(key: SettingsKey.engineSessionID)
+        SharedLogging.log("Engine session \(engineSessionID).", category: .tunnel)
+        let engine = TunnelEngine(configYAML: configYAML) { config in
+            Socks5Tunnel.run(withConfig: .string(content: config))
+        }
+        engine.onStopRequested = { Socks5Tunnel.quit() }
+        engine.onExit = { [weak self] code in
+            guard let self = self else { return }
+            SharedLogging.log("Tunnel engine exited with code \(code).", category: .tunnel)
+            self.failStartupIfStillInProgress(code: code)
+        }
+        engine.start()
+        guard startup.isInProgress else { return }
+        self.engine = engine
+
+        guard waitForEngineAlive(engine, timeout: 2.0) else {
+            finishStartup(TunnelError.provider(code: 4, message: "Tunnel engine exited during startup.").asNSError())
+            return
+        }
+        guard startup.isInProgress else { return }
+
+        // 4. Probe the local dispatcher end-to-end (SOCKS5 greeting + CONNECT).
+        guard probeLocalDispatcher(settings: settings, timeout: 5.0) else {
+            finishStartup(TunnelError.provider(code: 5, message: "Local SOCKS5 dispatcher did not answer the startup probe.").asNSError())
+            return
+        }
+        guard startup.isInProgress else { return }
+
+        // 5. Statistics + success.
+        let sampler = TunnelStatsSampler(settings: settings)
+        sampler.statsProvider = { () -> (upBytes: Int64, downBytes: Int64)? in
+            let stats = Socks5Tunnel.stats
+            return (upBytes: Int64(stats.up.bytes), downBytes: Int64(stats.down.bytes))
+        }
+        sampler.start()
+        statsSampler = sampler
+
+        tunnelEstablished = true
+        startExclusionRefreshTimer()
+        finishStartup(nil)
+    }
+
+    /// Builds the full tunnel network settings (MTU, IPv4/IPv6 routes, DNS)
+    /// for the given proxy-endpoint exclusion set. Used at startup and by the
+    /// periodic exclusion refresh.
+    private func buildTunnelSettings(config: ProxyConfiguration, settings: SharedSettings, exclusions: (ipv4: [String], ipv6: [String])) -> NEPacketTunnelNetworkSettings {
         let tunnelSettings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        let mtu = settings.mtuOrDefault
-        tunnelSettings.mtu = NSNumber(value: mtu)
-        SharedLogging.log("Tunnel MTU: \(mtu)", category: .vpn)
+        tunnelSettings.mtu = NSNumber(value: settings.mtuOrDefault)
 
         // IPv4: virtual address + default route.
         let ipv4Settings = NEIPv4Settings(addresses: [AppConfigConstants.tunnelIPv4], subnetMasks: ["255.255.255.0"])
         ipv4Settings.includedRoutes = [NEIPv4Route.default()]
 
-        // Excluded routes: proxy endpoints (prevent routing loops) + optional local network.
-        let isIPv6Enabled = settings.ipv6Enabled
-        let exclusions = resolvedProxyExclusions(config: config, isIPv6Enabled: isIPv6Enabled, budget: 2.0)
         var excludedRoutes = exclusions.ipv4.map { NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255") }
         SharedLogging.log("\(excludedRoutes.count) IPv4 proxy endpoint(s) excluded from the tunnel.", category: .vpn)
 
@@ -62,7 +191,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
         tunnelSettings.ipv4Settings = ipv4Settings
 
         // IPv6 (optional).
-        if isIPv6Enabled {
+        if settings.ipv6Enabled {
             let ipv6Settings = NEIPv6Settings(addresses: [AppConfigConstants.tunnelIPv6], networkPrefixLengths: [NSNumber(value: 64)])
             ipv6Settings.includedRoutes = [NEIPv6Route.default()]
             var ipv6Excluded = exclusions.ipv6.map { NEIPv6Route(destinationAddress: $0, networkPrefixLength: 128) }
@@ -80,78 +209,45 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
         let dnsSettings = NEDNSSettings(servers: [AppConfigConstants.dnsIPv4])
         dnsSettings.matchDomains = [""]
         tunnelSettings.dnsSettings = dnsSettings
+        return tunnelSettings
+    }
 
-        setTunnelNetworkSettings(tunnelSettings) { [weak self] error in
-            guard let self = self else { return }
+    /// Re-resolves hostname proxy endpoints every 60 s while the tunnel is up
+    /// and re-applies the exclusion routes only when the answer set changed.
+    /// Runs on `startupQueue`; failures are logged, never fatal.
+    private func startExclusionRefreshTimer() {
+        guard exclusionTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: startupQueue)
+        timer.schedule(deadline: .now() + 60.0, repeating: 60.0)
+        timer.setEventHandler { [weak self] in
+            self?.refreshExclusions()
+        }
+        exclusionTimer = timer
+        timer.resume()
+    }
+
+    private func refreshExclusions() {
+        guard tunnelEstablished, let settings = sharedSettings,
+              let config = settings.loadConfiguration() else { return }
+
+        let exclusions = resolvedProxyExclusions(config: config, isIPv6Enabled: settings.ipv6Enabled, budget: 1.0)
+        if let previous = lastExclusionSnapshot, previous == exclusions {
+            return
+        }
+        lastExclusionSnapshot = exclusions
+        SharedLogging.log("Proxy endpoint exclusions changed; re-applying tunnel routes (\(exclusions.ipv4.count) IPv4, \(exclusions.ipv6.count) IPv6).", category: .vpn)
+
+        let tunnelSettings = buildTunnelSettings(config: config, settings: settings, exclusions: exclusions)
+        setTunnelNetworkSettings(tunnelSettings) { error in
             if let error = error {
-                SharedLogging.log("Failed to set tunnel network settings: \(error.localizedDescription)", category: .vpn, level: .error)
-                self.finishStartup(error)
-                return
+                SharedLogging.log("Exclusion refresh failed: \(error.localizedDescription)", category: .vpn, level: .error)
             }
-            self.proceedAfterNetworkSettings(config: config, settings: settings, mtu: mtu, isIPv6Enabled: isIPv6Enabled)
         }
     }
 
-    /// Everything after the network settings are applied. The startup only
-    /// succeeds once every component is verified:
-    ///  - the local dispatcher listener is actually `.ready`;
-    ///  - the engine thread is running and does not exit during startup;
-    ///  - the dispatcher answers a real SOCKS5 probe.
-    ///
-    /// The TUN descriptor is never touched by this code: `NEPacketTunnelFlow`
-    /// owns it, and `Socks5Tunnel.run(withConfig:)` discovers it itself.
-    /// Any failure tears everything down and reports the real error.
-    private func proceedAfterNetworkSettings(config: ProxyConfiguration, settings: SharedSettings, mtu: Int, isIPv6Enabled: Bool) {
-
-        // 2. Local SOCKS5 dispatcher on 127.0.0.1.
-        let localPort: UInt16 = AppConfigConstants.localProxyPort
-        let dispatcher = LocalProxyServer(port: localPort, settings: settings)
-        dispatcher.hostResolver = { host, completion in
-            ProxyEndpointResolver.shared.resolve(host: host, completion: completion)
-        }
-        do {
-            try dispatcher.start()
-        } catch {
-            finishStartup(providerError(code: 3, message: "Failed to start local SOCKS5 dispatcher: \(error.localizedDescription)"))
-            return
-        }
-        localProxy = dispatcher
-
-        // 3. Engine.
-        let configYAML = EngineConfigBuilder.build(mtu: mtu, isIPv6Enabled: isIPv6Enabled, localPort: localPort)
-        let engine = TunnelEngine(configYAML: configYAML) { config in
-            Socks5Tunnel.run(withConfig: .string(content: config))
-        }
-        engine.onStopRequested = { Socks5Tunnel.quit() }
-        engine.onExit = { [weak self] code in
-            guard let self = self else { return }
-            SharedLogging.log("Tunnel engine exited with code \(code).", category: .tunnel)
-            self.failStartupIfStillInProgress(code: code)
-        }
-        engine.start()
-        self.engine = engine
-
-        guard waitForEngineAlive(engine, timeout: 2.0) else {
-            finishStartup(providerError(code: 4, message: "Tunnel engine exited during startup."))
-            return
-        }
-
-        // 4. Probe the local dispatcher end-to-end (SOCKS5 greeting + CONNECT).
-        guard probeLocalDispatcher(settings: settings, timeout: 5.0) else {
-            finishStartup(providerError(code: 5, message: "Local SOCKS5 dispatcher did not answer the startup probe."))
-            return
-        }
-
-        // 5. Statistics + success.
-        let sampler = TunnelStatsSampler(settings: settings)
-        sampler.statsProvider = { () -> (upBytes: Int64, downBytes: Int64)? in
-            let stats = Socks5Tunnel.stats
-            return (upBytes: Int64(stats.up.bytes), downBytes: Int64(stats.down.bytes))
-        }
-        sampler.start()
-        statsSampler = sampler
-
-        finishStartup(nil)
+    private func stopExclusionRefreshTimer() {
+        exclusionTimer?.cancel()
+        exclusionTimer = nil
     }
 
     /// Resolves hostname proxy endpoints once at startup so their IPs can be
@@ -207,11 +303,13 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
     /// Fail the startup if it has not completed yet (engine exited early).
     private func failStartupIfStillInProgress(code: Int32) {
         guard startup.isInProgress else { return }
-        finishStartup(providerError(code: 4, message: "Tunnel engine exited with code \(code) during startup."))
+        finishStartup(TunnelError.provider(code: 4, message: "Tunnel engine exited with code \(code) during startup.").asNSError())
     }
 
     /// Single exit point for the startup continuation. Guarantees the
     /// completion handler runs exactly once; tears everything down on failure.
+    /// May be called from `startupQueue` or the engine thread; teardown is
+    /// serialized internally.
     private func finishStartup(_ error: Error?) {
         guard let handler = startup.settle(error) else { return }
 
@@ -226,6 +324,16 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func teardown() {
+        teardownLock.lock()
+        guard !isTearingDown else {
+            teardownLock.unlock()
+            return
+        }
+        isTearingDown = true
+        teardownLock.unlock()
+
+        tunnelEstablished = false
+        stopExclusionRefreshTimer()
         statsSampler?.stop()
         statsSampler = nil
 
@@ -246,13 +354,16 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
         // down; the handler must not be invoked after stopTunnel).
         startup.cancel()
 
-        teardown()
-        completionHandler()
-    }
-
-    private func providerError(code: Int, message: String) -> Error {
-        NSError(domain: "Tunnexa.Provider", code: code,
-                userInfo: [NSLocalizedDescriptionKey: message])
+        // Teardown off the NE main thread: the engine stop can block up to
+        // its timeout, which must never stall the system thread.
+        startupQueue.async { [weak self] in
+            guard let self = self else {
+                completionHandler()
+                return
+            }
+            self.teardown()
+            completionHandler()
+        }
     }
 }
 

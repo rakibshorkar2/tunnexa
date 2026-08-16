@@ -65,6 +65,26 @@ struct DiagnosticsView: View {
                                 .stroke(Color.white.opacity(0.05), lineWidth: 1)
                         )
                         .padding(.horizontal)
+
+                        // 2. Sideload / Provisioning Status Card
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("PROVISIONING STATUS")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundColor(Color(hex: "64748B"))
+                                .tracking(1.0)
+
+                            ForEach(sideloadStages, id: \.title) { stage in
+                                DiagnosticItemRow(title: stage.title, value: stage.value, color: stage.color)
+                            }
+                        }
+                        .padding()
+                        .background(Color.white.opacity(0.03))
+                        .cornerRadius(18)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18)
+                                .stroke(Color.white.opacity(0.05), lineWidth: 1)
+                        )
+                        .padding(.horizontal)
                         
                         // 2. Logs Terminal Card
                         VStack(alignment: .leading, spacing: 12) {
@@ -177,10 +197,45 @@ struct DiagnosticsView: View {
     private var statusColor: Color {
         switch vpnViewModel.state {
         case .connected: return Color(hex: "10B981")
-        case .connecting, .reasserting, .preparing: return Color(hex: "F59E0B")
-        case .failed, .invalid: return Color(hex: "F43F5E")
+        case .connecting, .reasserting, .preparing, .degraded: return Color(hex: "F59E0B")
+        case .failed, .proxyFailed, .fatal, .invalid: return Color(hex: "F43F5E")
         default: return Color(hex: "EF4444")
         }
+    }
+
+    /// Honest sideload ladder: each stage reflects what is actually true on
+    /// this build/runtime, not what the profile *should* be. Sideloaded builds
+    /// without provisioning reports stay red here.
+    private struct SideloadStage {
+        let title: String
+        let value: String
+        let color: Color
+    }
+
+    private var sideloadStages: [SideloadStage] {
+        let green = Color(hex: "10B981")
+        let red = Color(hex: "F43F5E")
+        let amber = Color(hex: "F59E0B")
+        let env = VPNEnvironmentDetector.detectEnvironment()
+        let manager = VPNManager.shared
+
+        let systemVPN = env == .standalone
+
+        if !systemVPN {
+            return [
+                SideloadStage(title: "App Installed", value: "Yes", color: green),
+                SideloadStage(title: "Network Extension Provisioned", value: "N/A (no system VPN here)", color: amber),
+                SideloadStage(title: "Packet Tunnel Registered", value: "N/A (no system VPN here)", color: amber),
+                SideloadStage(title: "Tunnel Operational", value: vpnViewModel.state.isConnected ? "Yes" : "No", color: vpnViewModel.state.isConnected ? green : red)
+            ]
+        }
+
+        return [
+            SideloadStage(title: "App Installed", value: "Yes", color: green),
+            SideloadStage(title: "Network Extension Provisioned", value: manager.isEnabled ? "Yes" : "No", color: manager.isEnabled ? green : red),
+            SideloadStage(title: "Packet Tunnel Registered", value: manager.status != .invalid ? "Yes" : "No", color: manager.status != .invalid ? green : red),
+            SideloadStage(title: "Tunnel Operational", value: vpnViewModel.state.isConnected ? "Yes" : "No", color: vpnViewModel.state.isConnected ? green : red)
+        ]
     }
 }
 

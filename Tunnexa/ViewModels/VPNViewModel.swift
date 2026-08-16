@@ -41,9 +41,9 @@ public class VPNViewModel: ObservableObject {
 
     public func toggleConnection() {
         switch state {
-        case .connected:
+        case .connected, .degraded:
             vpnManager.stopVPN()
-        case .disconnected, .failed:
+        case .disconnected, .failed, .proxyFailed, .fatal:
             activeError = nil
             vpnManager.startVPN { [weak self] result in
                 DispatchQueue.main.async {
@@ -71,7 +71,7 @@ public class VPNViewModel: ObservableObject {
         if newState.isConnected {
             connectionStartTime = Date()
             startTimer()
-        } else if newState == .disconnected || newState == .failed || newState == .unavailable || newState == .invalid {
+        } else if newState == .disconnected || newState == .failed || newState == .unavailable || newState == .invalid || newState == .proxyFailed || newState == .fatal {
             stopTimer()
             sessionDuration = "00:00:00"
             uploadSpeed = "0 B/s"

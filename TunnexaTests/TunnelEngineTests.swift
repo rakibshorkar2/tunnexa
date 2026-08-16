@@ -148,4 +148,47 @@ final class TunnelEngineTests: XCTestCase {
         wait(for: [runExited], timeout: 5.0)
         XCTAssertFalse(engine.isRunning)
     }
+
+    // MARK: - MockTunnelBackend (scriptable lifecycle)
+
+    func testMockBackendLifecycle() {
+        let mock = MockTunnelBackend()
+        XCTAssertFalse(mock.isRunning)
+        XCTAssertNil(mock.exitCode)
+
+        mock.start()
+        XCTAssertTrue(mock.isRunning)
+        XCTAssertNil(mock.exitCode)
+
+        let exitExpectation = expectation(description: "mock exit observed")
+        mock.onExit = { code in
+            XCTAssertEqual(code, 9)
+            exitExpectation.fulfill()
+        }
+        mock.simulateExit(code: 9)
+        wait(for: [exitExpectation], timeout: 1.0)
+        XCTAssertFalse(mock.isRunning)
+        XCTAssertEqual(mock.exitCode, 9)
+    }
+
+    func testMockBackendStopRequested() {
+        let mock = MockTunnelBackend()
+        mock.start()
+        let stopRequested = expectation(description: "mock stop request observed")
+        mock.onStopRequested = { stopRequested.fulfill() }
+        mock.stop(timeout: 0.1)
+        wait(for: [stopRequested], timeout: 1.0)
+        XCTAssertFalse(mock.isRunning)
+        XCTAssertEqual(mock.stopRequests, 1)
+    }
+
+    func testMockBackendRestartClearsExitCode() {
+        let mock = MockTunnelBackend()
+        mock.start()
+        mock.simulateExit(code: 3)
+        XCTAssertEqual(mock.exitCode, 3)
+        mock.start()
+        XCTAssertNil(mock.exitCode, "a fresh start must clear the previous exit code")
+        XCTAssertTrue(mock.isRunning)
+    }
 }

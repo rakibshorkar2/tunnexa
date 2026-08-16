@@ -22,7 +22,11 @@ public final class ProxyEndpointResolver {
     private var cache: [String: CacheEntry] = [:]
     private let lock = NSLock()
     private let cacheTTL: TimeInterval = 60.0
-    private let workQueue = DispatchQueue(label: "com.rakib.tunnexa.dnsresolver", qos: .utility)
+    /// CONCURRENT on purpose: the async variant dispatches onto this queue and
+    /// the synchronous variant may re-enter it while waiting on a semaphore.
+    /// A serial queue would deadlock (the inner lookup block could never run
+    /// while the outer block is blocked waiting for it).
+    private let workQueue = DispatchQueue(label: "com.rakib.tunnexa.dnsresolver", qos: .utility, attributes: .concurrent)
 
     private init() {}
 
@@ -62,6 +66,9 @@ public final class ProxyEndpointResolver {
 
     /// Asynchronous lookup with cache, matching the dispatcher's resolver
     /// signature (`(host, completion) -> Void`).
+    ///
+    /// Runs on the concurrent work queue directly (no re-entrant dispatch into
+    /// a serial queue, which would deadlock against the synchronous variant).
     public func resolve(host: String, completion: @escaping ([String]) -> Void) {
         workQueue.async { [weak self] in
             let addresses = self?.resolve(host: host) ?? []

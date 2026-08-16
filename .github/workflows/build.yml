@@ -8,10 +8,188 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: tunnexa-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# CI LABELS (explicit status contract)
+#
+#   SIMULATOR_TESTS_PASS
+#       Reported by the parallel `simulator-tests` job. This is a code-quality
+#       gate ONLY: the simulator-suitable unit suite (pure Swift, SOCKS5/YAML
+#       protocol, hermetic DNS regression, injected engine lifecycle) passed
+#       on an arm64 iOS Simulator. It is NOT proof that the VPN works:
+#       packet-tunnel / NetworkExtension behavior cannot be validated on a
+#       simulator and is verified on a physical iPhone only.
+#
+#   IPHONEOS_BUILD_PASS
+#       Reported by the `build` job once the Release archive for the iPhoneOS
+#       arm64 configuration (the target device is a physical iPhone 15 Pro)
+#       has been produced.
+#
+#   IPA_VALIDATION_PASS
+#       Reported by the `build` job once validate_ipa.py has confirmed the
+#       archive contents: Tunnexa.app + embedded TunnexaPacketTunnel.appex,
+#       bundle identifiers, NSExtension packet-tunnel metadata, arm64 device
+#       binaries, App Group declaration, and entitlement state (embedded only
+#       where signing permits).
+# ---------------------------------------------------------------------------
+
 jobs:
-  build:
-    name: Build & Package Tunnexa
+  # -------------------------------------------------------------------------
+  # Code-quality gate. Runs in PARALLEL with the production build and never
+  # blocks or slows it. Only the simulator-suitable test subset runs here.
+  # -------------------------------------------------------------------------
+  simulator-tests:
+    name: Code Quality - Simulator Unit Tests (arm64)
     runs-on: macos-26
+    timeout-minutes: 30
+    outputs:
+      sim_tests_pass: ${{ steps.labels.outputs.sim_tests_pass }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 26.6
+        run: |
+          if [ -d "/Applications/Xcode_26.6.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [ -d "/Applications/Xcode_26.3.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.3.app
+          elif [ -d "/Applications/Xcode_26.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          elif [ -d "/Applications/Xcode.app" ]; then
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Regenerate Xcode Project
+        run: python3 generate_project.py
+
+      - name: Cache Swift Package Dependencies
+        uses: actions/cache@v4
+        with:
+          path: SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('Tunnexa.xcodeproj/project.pbxproj') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
+
+      - name: Cache DerivedData (test build reuse)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: deriveddata-tests-${{ runner.os }}-${{ hashFiles('Tunnexa.xcodeproj/project.pbxproj') }}
+          restore-keys: |
+            deriveddata-tests-${{ runner.os }}-
+
+      - name: Resolve Swift Package Dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Tunnexa.xcodeproj \
+            -scheme Tunnexa \
+            -clonedSourcePackagesDirPath SourcePackages
+
+      # PHASE 1/2: compile everything once. This is where most of the ~11 min
+      # goes: Tun2SocksKit simulator slice (SPM C/C++ build) + app + packet
+      # tunnel extension + test bundle. Split from execution so the build can
+      # be cached (DerivedData) and so the two phases are timed separately.
+      - name: "PHASE 1/2: Build for Testing"
+        run: |
+          START=$(date +%s)
+          DEVICE_NAME=$(xcrun simctl list devices available -j | python3 -c "import json,sys; data=json.load(sys.stdin); devices=[d['name'] for runtime in data['devices'].values() for d in runtime if d['isAvailable']]; print(devices[0] if devices else 'iPhone 16')")
+          echo "Using simulator: $DEVICE_NAME"
+          echo "DEVICE_NAME=$DEVICE_NAME" >> "$GITHUB_ENV"
+          xcodebuild build-for-testing \
+            -project Tunnexa.xcodeproj \
+            -scheme Tunnexa \
+            -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
+            -clonedSourcePackagesDirPath SourcePackages \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=YES
+          END=$(date +%s)
+          echo "PHASE_DURATION build_for_testing_seconds=$((END-START))"
+
+      # PHASE 2/2: run ONLY the simulator-suitable subset, in parallel across
+      # worker processes (each worker is its own xctest process, so the
+      # shared singletons in the app host are not racy between classes).
+      #
+      # Simulator-suitable groups (explicit -only-testing):
+      #   - Pure Swift/unit: AutoReconnect, CredentialStore, EngineConfig,
+      #     EnvironmentDetector, LogRedaction, Routing, StartupStateMachine,
+      #     TunnelEngine (injected run closure / MockTunnelBackend),
+      #     TunnelError, VPNManager (environment + error mapping)
+      #   - SOCKS5/YAML/protocol: SOCKS5Protocol, LocalProxyServerLimits,
+      #     YAMLParser
+      #   - Host networking, hermetic only: ProxyEndpointResolver
+      #     (RFC 2606 .invalid TLD -> guaranteed NXDOMAIN; no external service)
+      #
+      # Excluded by design (physical-device validation only):
+      #   - NEPacketTunnelProvider / NEVPNManager behavior
+      #   - Real networking (upstream proxy handshakes, tunneled traffic)
+      - name: "PHASE 2/2: Run Unit Tests (simulator-suitable subset)"
+        run: |
+          START=$(date +%s)
+          xcodebuild test-without-building \
+            -project Tunnexa.xcodeproj \
+            -scheme Tunnexa \
+            -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
+            -clonedSourcePackagesDirPath SourcePackages \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=YES \
+            -parallel-testing-enabled YES \
+            -maximum-parallel-testing-workers 4 \
+            -only-testing:TunnexaTests/AutoReconnectTests \
+            -only-testing:TunnexaTests/CredentialStoreTests \
+            -only-testing:TunnexaTests/EngineConfigTests \
+            -only-testing:TunnexaTests/EnvironmentDetectorTests \
+            -only-testing:TunnexaTests/LogRedactionTests \
+            -only-testing:TunnexaTests/RoutingTests \
+            -only-testing:TunnexaTests/StartupStateMachineTests \
+            -only-testing:TunnexaTests/TunnelEngineTests \
+            -only-testing:TunnexaTests/TunnelErrorTests \
+            -only-testing:TunnexaTests/VPNManagerTests \
+            -only-testing:TunnexaTests/YAMLParserTests \
+            -only-testing:TunnexaTests/ProxyEndpointResolverTests \
+            -only-testing:TunnexaTests/SOCKS5ProtocolTests \
+            -only-testing:TunnexaTests/LocalProxyServerLimitsTests
+          END=$(date +%s)
+          echo "PHASE_DURATION test_execution_seconds=$((END-START))"
+
+      - name: "CI LABEL: SIMULATOR_TESTS_PASS"
+        id: labels
+        run: |
+          echo "sim_tests_pass=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "## CI LABEL: SIMULATOR_TESTS_PASS"
+            echo ""
+            echo "The simulator-suitable unit suite passed on an arm64 iOS Simulator."
+            echo ""
+            echo "> **Code-quality gate only — NOT proof that the VPN works.**"
+            echo "> Packet-tunnel / NetworkExtension behavior is validated on a physical"
+            echo "> iPhone (target: iPhone 15 Pro) only. No simulator test exercises"
+            echo "> NEPacketTunnelProvider, NEVPNManager, or real upstream proxies."
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf 'SIMULATOR_TESTS_PASS\n' > ci-labels.txt
+
+      - name: Upload CI Labels Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-labels
+          path: ci-labels.txt
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Production pipeline. Priority: the iPhoneOS arm64 Release archive with the
+  # PacketTunnel extension embedded. Deliberately independent of the test job.
+  # -------------------------------------------------------------------------
+  build:
+    name: Production - iPhoneOS arm64 Unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 30
 
     steps:
       - name: Checkout Repository
@@ -30,11 +208,7 @@ jobs:
           fi
           echo "Active Xcode:"
           xcodebuild -version
-
-      - name: Print CI Environment Details
-        run: |
           echo "=== CI Environment Details ==="
-          xcodebuild -version
           swift --version
           xcrun --sdk iphoneos --show-sdk-version || true
           echo "Build number: ${{ github.run_number }}"
@@ -64,7 +238,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: SourcePackages
-          key: spm-${{ runner.os }}-${{ hashFiles('**/Package.resolved') }}
+          key: spm-${{ runner.os }}-${{ hashFiles('Tunnexa.xcodeproj/project.pbxproj') }}
           restore-keys: |
             spm-${{ runner.os }}-
 
@@ -75,19 +249,7 @@ jobs:
             -scheme Tunnexa \
             -clonedSourcePackagesDirPath SourcePackages
 
-      - name: Run Unit Tests (Simulator)
-        run: |
-          DEVICE_NAME=$(xcrun simctl list devices available -j | python3 -c "import json,sys; data=json.load(sys.stdin); devices=[d['name'] for runtime in data['devices'].values() for d in runtime if d['isAvailable']]; print(devices[0] if devices else 'iPhone 16')")
-          echo "Using simulator: $DEVICE_NAME"
-          xcodebuild test \
-            -project Tunnexa.xcodeproj \
-            -scheme Tunnexa \
-            -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
-            -clonedSourcePackagesDirPath SourcePackages \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
-
-      - name: Clean & Build Archive (Unsigned)
+      - name: Clean & Build Archive (Unsigned, iPhoneOS arm64)
         run: |
           xcodebuild archive \
             -project Tunnexa.xcodeproj \
@@ -96,11 +258,17 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath build/Tunnexa.xcarchive \
             -clonedSourcePackagesDirPath SourcePackages \
+            ARCHS=arm64 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             SKIP_INSTALL=NO
+
+      - name: "CI LABEL: IPHONEOS_BUILD_PASS"
+        run: |
+          echo "IPHONEOS_BUILD_PASS"
+          echo "CI LABEL: IPHONEOS_BUILD_PASS" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package Unsigned IPA & ZIP
         run: |
@@ -117,11 +285,77 @@ jobs:
           echo "Xcode Version: $(xcodebuild -version | head -1)" >> build-info.txt
           echo "SDK: iOS $(xcrun --sdk iphoneos --show-sdk-version || echo '26.6')" >> build-info.txt
           echo "Date: $(date)" >> build-info.txt
+          echo "CI Labels: IPHONEOS_BUILD_PASS, IPA_VALIDATION_PASS (SIMULATOR_TESTS_PASS is reported by the parallel simulator-tests job and is NOT VPN validation)" >> build-info.txt
 
       - name: Validate IPA Packaging
         run: |
-          python3 validate_ipa.py --app build/Tunnexa.xcarchive/Products/Applications/Tunnexa.app --expect-unsigned
-          python3 validate_ipa.py --ipa build/Tunnexa-unsigned-build-${{ github.run_number }}.ipa --expect-unsigned
+          python3 validate_ipa.py --app build/Tunnexa.xcarchive/Products/Applications/Tunnexa.app --expect-unsigned --json
+          python3 validate_ipa.py --ipa build/Tunnexa-unsigned-build-${{ github.run_number }}.ipa --expect-unsigned --json
+
+      - name: Verify Device Architectures (arm64 only)
+        run: |
+          APP=build/Tunnexa.xcarchive/Products/Applications/Tunnexa.app
+          python3 - "$APP" <<'EOF'
+          import json, subprocess, sys
+          app = sys.argv[1]
+          out = subprocess.run(
+              ["python3", "validate_ipa.py", "--app", app, "--expect-unsigned", "--json"],
+              capture_output=True, text=True, check=True
+          ).stdout
+          summary = json.loads(out[out.index("{"):])
+          archs = summary["architectures"]["app"] + summary["architectures"]["extension"]
+          if not archs:
+              print("ERROR: could not determine architectures"); sys.exit(1)
+          unexpected = [a for a in archs if a != "arm64"]
+          if unexpected:
+              print(f"ERROR: non-device architecture present: {unexpected}")
+              sys.exit(1)
+          print(f"OK: all binaries are arm64-only ({archs})")
+          EOF
+
+      - name: Verify Final Archive Contents
+        run: |
+          APP=build/Tunnexa.xcarchive/Products/Applications/Tunnexa.app
+          python3 - "$APP" <<'EOF'
+          import json, subprocess, sys
+          app = sys.argv[1]
+          out = subprocess.run(
+              ["python3", "validate_ipa.py", "--app", app, "--expect-unsigned", "--json"],
+              capture_output=True, text=True, check=True
+          ).stdout
+          s = json.loads(out[out.index("{"):])
+          print("=== Final Archive Verification ===")
+          print(f"  Tunnexa.app present:            {s['bundle_ids']['app'] == 'com.rakib.tunnexa'}")
+          print(f"  TunnexaPacketTunnel.appex:      {'embedded' if s['extension_embedded'] else 'MISSING'}")
+          print(f"  Extension bundle ID:            {s['bundle_ids']['extension']}")
+          print(f"  NSExtensionPointIdentifier:     {s['extension_point']}")
+          print(f"  NSExtensionPrincipalClass:      {s['principal_class']}")
+          print(f"  App binaries:                   {', '.join(s['architectures']['app'])}")
+          print(f"  Extension binaries:             {', '.join(s['architectures']['extension'])}")
+          print(f"  Signing state:                  {'signed' if s['signing']['app_signed'] else 'unsigned'}")
+          print(f"  Entitlements embedded:          {'yes' if s['entitlements']['embedded_in_archive'] else 'no (unsigned artifact — embedded at signing time)'}")
+          print(f"  Source App Group declaration:   {s['entitlements']['source_application_groups']}")
+          print(f"  Source NE entitlement:          {s['entitlements']['source_networkextension']}")
+          checks = {
+              "app_bundle_id": s["bundle_ids"]["app"] == "com.rakib.tunnexa",
+              "extension_embedded": s["extension_embedded"],
+              "extension_bundle_id": s["bundle_ids"]["extension"] == "com.rakib.tunnexa.PacketTunnel",
+              "extension_point": s["extension_point"] == "com.apple.networkextension.packet-tunnel",
+              "principal_class": bool(s["principal_class"]),
+              "arm64_only": all(a == "arm64" for a in s["architectures"]["app"] + s["architectures"]["extension"]),
+              "app_group_declared": "group.com.rakib.tunnexa" in s["entitlements"]["source_application_groups"],
+          }
+          failed = [k for k, v in checks.items() if not v]
+          if failed:
+              print(f"ERROR: archive verification failed: {failed}")
+              sys.exit(1)
+          print("OK: all archive content checks passed")
+          EOF
+
+      - name: "CI LABEL: IPA_VALIDATION_PASS"
+        run: |
+          echo "IPA_VALIDATION_PASS"
+          echo "CI LABEL: IPA_VALIDATION_PASS" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub Release on Push
         id: create_release
@@ -137,6 +371,12 @@ jobs:
             - **Runner**: `macos-26`
             - **Xcode**: `26.6`
             - **Build Number**: `${{ github.run_number }}`
+            - **Architecture**: iPhoneOS `arm64` only (target device: iPhone 15 Pro)
+
+            #### CI Labels
+            - `IPHONEOS_BUILD_PASS` — iPhoneOS arm64 Release archive built with the PacketTunnel extension embedded.
+            - `IPA_VALIDATION_PASS` — structural archive/IPA validation passed (bundle IDs, embedded `TunnexaPacketTunnel.appex`, `NSExtensionPointIdentifier` = `com.apple.networkextension.packet-tunnel`, arm64-only binaries, App Group declaration).
+            - `SIMULATOR_TESTS_PASS` — reported by the parallel **simulator-tests** job (see its run summary / `ci-labels` artifact). This is a **code-quality gate only and is NOT proof that the VPN works**: packet-tunnel/NetworkExtension behavior and real networking are validated on a physical iPhone only.
 
             #### Sideload Instructions
             This is an **unsigned** build. Honest capability notes:

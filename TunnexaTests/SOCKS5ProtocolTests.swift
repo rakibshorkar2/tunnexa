@@ -614,3 +614,195 @@ final class MockSocksServer {
         connections.forEach { $0.cancel() }
     }
 }
+
+// MARK: - Dispatcher resource limits & configuration generation
+
+final class LocalProxyServerLimitsTests: XCTestCase {
+
+    var suiteName: String!
+    var settings: SharedSettings!
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "group.com.rakib.tunnexa_limits_\(UUID().uuidString)"
+        settings = SharedSettings(suiteName: suiteName)
+    }
+
+    override func tearDown() {
+        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+        super.tearDown()
+    }
+
+    private func installDirectConfig() {
+        settings.saveConfiguration(ProxyConfiguration(
+            proxies: [],
+            groups: [],
+            rules: [Rule(type: .match, payload: nil, target: RouteDirect)]
+        ))
+        settings.selectedProxyName = ""
+        settings.selectedGroupName = ""
+    }
+
+    /// Raw loopback client with state observation (cancellation detection).
+    private func makeClient(port: UInt16, stateHandler: @escaping (NWConnection.State) -> Void) -> (NWConnection, DispatchQueue) {
+        let queue = DispatchQueue(label: "com.rakib.tunnexa.tests.limits.\(UUID().uuidString)")
+        let connection = NWConnection(
+            to: NWEndpoint.hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!),
+            using: .tcp
+        )
+        connection.stateUpdateHandler = stateHandler
+        connection.start(queue: queue)
+        return (connection, queue)
+    }
+
+    func testHandshakeTimeoutDisconnectsStalledClient() {
+        installDirectConfig()
+        let port = allocateLoopbackPort()
+        let limits = ProxyLimits(maxConnections: 16, maxUDPAssociations: 4, maxDirectRelays: 4, handshakeTimeout: 0.5)
+        let dispatcher = LocalProxyServer(port: port, settings: settings, limits: limits)
+        defer { dispatcher.stop() }
+        do { try dispatcher.start() } catch { XCTFail("Dispatcher failed to start: \(error)") }
+
+        // Connect but never send the greeting: the deadline must disconnect us.
+        let cancelled = expectation(description: "stalled client disconnected by handshake deadline")
+        let (client, _) = makeClient(port: port) { state in
+            switch state {
+            case .cancelled, .failed:
+                cancelled.fulfill()
+            default:
+                break
+            }
+        }
+        wait(for: [cancelled], timeout: 3.0)
+        client.cancel()
+    }
+
+    func testMaxConnectionsRejectsBeyondCap() {
+        installDirectConfig()
+        let port = allocateLoopbackPort()
+        let limits = ProxyLimits(maxConnections: 1, maxUDPAssociations: 4, maxDirectRelays: 4, handshakeTimeout: 5.0)
+        let dispatcher = LocalProxyServer(port: port, settings: settings, limits: limits)
+        defer { dispatcher.stop() }
+        do { try dispatcher.start() } catch { XCTFail("Dispatcher failed to start: \(error)") }
+
+        let firstReady = expectation(description: "first client connected")
+        let (first, _) = makeClient(port: port) { state in
+            if case .ready = state { firstReady.fulfill() }
+        }
+        wait(for: [firstReady], timeout: 3.0)
+        // The client-side `.ready` may fire a hair before the server registers
+        // the connection; give the listener queue a beat so the cap is real.
+        Thread.sleep(forTimeInterval: 0.25)
+
+        // Second connection must be closed immediately (cap reached).
+        let rejected = expectation(description: "second client rejected at the cap")
+        let (second, _) = makeClient(port: port) { state in
+            switch state {
+            case .cancelled, .failed:
+                rejected.fulfill()
+            default:
+                break
+            }
+        }
+        wait(for: [rejected], timeout: 3.0)
+        first.cancel()
+        second.cancel()
+    }
+
+    func testUDPAssociationCapRejectsBeyondLimit() {
+        installDirectConfig()
+        let port = allocateLoopbackPort()
+        let limits = ProxyLimits(maxConnections: 16, maxUDPAssociations: 1, maxDirectRelays: 4, handshakeTimeout: 5.0)
+        let dispatcher = LocalProxyServer(port: port, settings: settings, limits: limits)
+        defer { dispatcher.stop() }
+        do { try dispatcher.start() } catch { XCTFail("Dispatcher failed to start: \(error)") }
+
+        func openAssociation(_ client: Socks5TestClient, replyCode: UInt8, expectation: XCTestExpectation) {
+            client.start()
+            client.send(Data([0x05, 0x01, 0x00]))
+            client.receive(minimum: 2, maximum: 2) { data, _ in
+                XCTAssertEqual(data, Data([0x05, 0x00]))
+                var request = Data([0x05, 0x03, 0x00, 0x01, 127, 0, 0, 1])
+                request.append(UInt8((0 >> 8) & 0xFF))
+                request.append(UInt8(0 & 0xFF))
+                client.send(request)
+                client.receive(minimum: 10, maximum: 10) { reply, _ in
+                    XCTAssertEqual(reply?[1], replyCode, "expected REP \(replyCode)")
+                    expectation.fulfill()
+                }
+            }
+        }
+
+        let firstAccepted = expectation(description: "first UDP association accepted")
+        let firstClient = Socks5TestClient(port: port)
+        openAssociation(firstClient, replyCode: 0x00, expectation: firstAccepted)
+        wait(for: [firstAccepted], timeout: 5.0)
+
+        let secondRejected = expectation(description: "second UDP association rejected")
+        let secondClient = Socks5TestClient(port: port)
+        openAssociation(secondClient, replyCode: 0x01, expectation: secondRejected)
+        wait(for: [secondRejected], timeout: 5.0)
+
+        firstClient.cancel()
+        secondClient.cancel()
+    }
+
+    func testConfigurationGenerationTriggersReload() {
+        let port = allocateLoopbackPort()
+        let dispatcher = LocalProxyServer(port: port, settings: settings)
+        defer { dispatcher.stop() }
+        do { try dispatcher.start() } catch { XCTFail("Dispatcher failed to start: \(error)") }
+
+        // Generation 1: MATCH -> DIRECT.
+        settings.saveConfiguration(ProxyConfiguration(
+            proxies: [],
+            groups: [],
+            rules: [Rule(type: .match, payload: nil, target: RouteDirect)]
+        ))
+        settings.selectedProxyName = ""
+        settings.selectedGroupName = ""
+        dispatcher.loadConfig()
+
+        let firstSuccess = expectation(description: "first config routes DIRECT")
+        let client1 = Socks5TestClient(port: port)
+        client1.start()
+        client1.send(Data([0x05, 0x01, 0x00]))
+        client1.receive(minimum: 2, maximum: 2) { _, _ in
+            var request = Data([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1])
+            request.append(UInt8((1 >> 8) & 0xFF))
+            request.append(UInt8(1 & 0xFF))
+            client1.send(request)
+            client1.receive(minimum: 10, maximum: 10) { reply, _ in
+                XCTAssertEqual(reply?[1], 0x00, "generation 1 must route DIRECT")
+                firstSuccess.fulfill()
+            }
+        }
+        wait(for: [firstSuccess], timeout: 5.0)
+        client1.cancel()
+
+        // Generation 2: MATCH -> BLOCKED. loadConfig must notice the bump.
+        settings.saveConfiguration(ProxyConfiguration(
+            proxies: [],
+            groups: [],
+            rules: [Rule(type: .match, payload: nil, target: RouteBlocked)]
+        ))
+        dispatcher.loadConfig()
+
+        let secondBlocked = expectation(description: "second config routes BLOCKED")
+        let client2 = Socks5TestClient(port: port)
+        client2.start()
+        client2.send(Data([0x05, 0x01, 0x00]))
+        client2.receive(minimum: 2, maximum: 2) { _, _ in
+            var request = Data([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1])
+            request.append(UInt8((1 >> 8) & 0xFF))
+            request.append(UInt8(1 & 0xFF))
+            client2.send(request)
+            client2.receive(minimum: 10, maximum: 10) { reply, _ in
+                XCTAssertEqual(reply?[1], 0x02, "generation 2 must route BLOCKED")
+                secondBlocked.fulfill()
+            }
+        }
+        wait(for: [secondBlocked], timeout: 5.0)
+        client2.cancel()
+    }
+}

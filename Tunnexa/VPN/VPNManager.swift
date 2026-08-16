@@ -37,6 +37,9 @@ public class VPNManager: ObservableObject {
     private var connectTimeoutWork: DispatchWorkItem?
     private var reconnectTimer: Timer?
     private var wasConnected = false
+    /// Set when the user (or the app) explicitly stopped the tunnel. An
+    /// unexpected `.disconnected` afterwards must not trigger auto-reconnect.
+    private var userInitiatedStop = false
 
     private let connectTimeout: TimeInterval = 30.0
 
@@ -176,14 +179,20 @@ public class VPNManager: ObservableObject {
         switch newStatus {
         case .connected:
             wasConnected = true
+            userInitiatedStop = false
             reconnectAttempt = 0
             cancelReconnectTimer()
+            if state.isFailure {
+                state = .disconnected
+            }
             fulfillConnectWaiters(success: true)
         case .connecting, .reasserting:
             // Progress; no completion yet.
             break
         case .disconnected:
-            if wasConnected {
+            let wasManual = userInitiatedStop
+            userInitiatedStop = false
+            if wasConnected, !wasManual {
                 scheduleReconnectIfNeeded()
             }
             fulfillConnectWaiters(success: false)
@@ -219,6 +228,7 @@ public class VPNManager: ObservableObject {
 
     public func startVPN(completion: @escaping (Result<Void, VPNErrorDetails>) -> Void) {
         let env = VPNEnvironmentDetector.detectEnvironment()
+        userInitiatedStop = false
         guard env.isSupportedForSystemVPN else {
             let errorDetails = environmentUnsupportedError(env: env)
             lastError = errorDetails
@@ -389,24 +399,32 @@ public class VPNManager: ObservableObject {
     public func stopVPN() {
         cancelReconnectTimer()
         reconnectAttempt = 0
+        userInitiatedStop = true
         guard let manager = manager else { return }
         manager.connection.stopVPNTunnel()
-        SharedLogging.log("stopVPNTunnel() requested.", category: .vpn)
+        SharedLogging.log("stopVPNTunnel() requested (manual stop; auto-reconnect suppressed).", category: .vpn)
     }
 
     // MARK: - Auto-reconnect
 
     private func scheduleReconnectIfNeeded() {
         cancelReconnectTimer()
-        guard SharedSettings().autoReconnect else { return }
-        guard AutoReconnectPolicy.mayRetry(afterAttempt: reconnectAttempt) else {
-            SharedLogging.log("Auto-reconnect exhausted after \(reconnectAttempt) attempts; waiting for user action.", category: .vpn, level: .warning)
+        guard SharedSettings().autoReconnect else {
+            state = .proxyFailed
             return
         }
+        guard AutoReconnectPolicy.mayRetry(afterAttempt: reconnectAttempt) else {
+            SharedLogging.log("Auto-reconnect exhausted after \(reconnectAttempt) attempts; waiting for user action.", category: .vpn, level: .warning)
+            // Fail-closed: the tunnel is down and we stop retrying. Never
+            // silently fall back to direct networking.
+            state = .proxyFailed
+            return
+        }
+        state = .degraded
         reconnectAttempt += 1
         let attempt = reconnectAttempt
-        let delay = AutoReconnectPolicy.delay(forAttempt: attempt)
-        SharedLogging.log("Scheduling auto-reconnect attempt \(attempt) in \(delay)s.", category: .vpn)
+        let delay = AutoReconnectPolicy.jitteredDelay(forAttempt: attempt)
+        SharedLogging.log("Scheduling auto-reconnect attempt \(attempt) in \(String(format: "%.1f", delay))s.", category: .vpn)
 
         let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             guard let self = self else { return }

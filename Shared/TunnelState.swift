@@ -22,6 +22,16 @@ public enum TunnelState: String, Codable, Equatable {
     case disconnecting
     /// The tunnel failed (start-up error, unexpected disconnect, invalid selection).
     case failed
+    /// The tunnel is up but the selected proxy is failing (engine reconnects
+    /// or is in a degraded routing state).
+    case degraded
+    /// Reconnect attempts were exhausted after an unexpected proxy failure and
+    /// fail-closed policy left traffic blocked rather than leaking directly.
+    case proxyFailed
+    /// A configuration/environment problem that cannot be recovered from
+    /// without user action (missing config, invalid profile, unsupported
+    /// runtime).
+    case fatal
 
     public init(status: NEVPNStatus, profileAvailable: Bool = true, profileValid: Bool = true, hasFailure: Bool = false) {
         guard profileAvailable else {
@@ -52,7 +62,7 @@ public enum TunnelState: String, Codable, Equatable {
 
     public var isActive: Bool {
         switch self {
-        case .connecting, .connected, .reasserting, .disconnecting:
+        case .connecting, .connected, .reasserting, .disconnecting, .degraded:
             return true
         default:
             return false
@@ -61,6 +71,15 @@ public enum TunnelState: String, Codable, Equatable {
 
     public var isConnected: Bool {
         return self == .connected
+    }
+
+    public var isFailure: Bool {
+        switch self {
+        case .failed, .proxyFailed, .fatal:
+            return true
+        default:
+            return false
+        }
     }
 
     public var displayName: String {
@@ -74,6 +93,9 @@ public enum TunnelState: String, Codable, Equatable {
         case .reasserting: return "Reconnecting..."
         case .disconnecting: return "Disconnecting..."
         case .failed: return "Failed"
+        case .degraded: return "Degraded"
+        case .proxyFailed: return "Proxy Failed (blocked)"
+        case .fatal: return "Fatal"
         }
     }
 }
