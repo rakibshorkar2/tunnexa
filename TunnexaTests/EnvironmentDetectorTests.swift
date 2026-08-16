@@ -69,8 +69,9 @@ final class EnvironmentDetectorTests: XCTestCase {
     func testLiveContainerDetectedViaDocumentsPathSignature() {
         XCTAssertEqual(
             VPNEnvironmentDetector.detectEnvironment(
-                documentsPath: "/var/mobile/Containers/Data/Application/XXXX/Documents/com.kdt.livecontainer/Apps",
+                environment: [:],
                 bundleIdentifier: "com.rakib.tunnexa",
+                documentsPath: "/var/mobile/Containers/Data/Application/XXXX/Documents/com.kdt.livecontainer/Apps",
                 isSimulator: simulator
             ),
             .liveContainer

@@ -11,7 +11,8 @@ final class VPNManagerTests: XCTestCase {
             environment: [:],
             bundlePath: "/private/var/containers/Bundle/Application/ABCD1234/Tunnexa.app",
             bundleIdentifier: "com.rakib.tunnexa",
-            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/Documents"
+            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/Documents",
+            isSimulator: false
         )
         XCTAssertEqual(env, .standalone, "Canonical Tunnexa bundle ID should be classified as standalone")
         XCTAssertTrue(env.isSupportedForSystemVPN)
@@ -22,7 +23,8 @@ final class VPNManagerTests: XCTestCase {
             environment: ["LC_APP_ID": "com.rakib.tunnexa"],
             bundlePath: "/private/var/containers/Bundle/Application/ABCD1234/Tunnexa.app",
             bundleIdentifier: "com.rakib.tunnexa",
-            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/Documents"
+            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/Documents",
+            isSimulator: false
         )
         XCTAssertEqual(env, .liveContainer, "LC_APP_ID env var must classify as LiveContainer")
         XCTAssertFalse(env.isSupportedForSystemVPN)
@@ -33,7 +35,8 @@ final class VPNManagerTests: XCTestCase {
             environment: [:],
             bundlePath: "/private/var/containers/Bundle/Application/ABCD1234/LiveContainer/Tunnexa.app",
             bundleIdentifier: "com.rakib.tunnexa",
-            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/Documents"
+            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/Documents",
+            isSimulator: false
         )
         XCTAssertEqual(env, .liveContainer, "LiveContainer directory in bundle path must be detected")
         XCTAssertFalse(env.isSupportedForSystemVPN)
@@ -44,7 +47,8 @@ final class VPNManagerTests: XCTestCase {
             environment: [:],
             bundlePath: "/private/var/containers/Bundle/Application/ABCD1234/Tunnexa.app",
             bundleIdentifier: "com.rakib.tunnexa",
-            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/LiveContainer/Documents"
+            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/LiveContainer/Documents",
+            isSimulator: false
         )
         XCTAssertEqual(env, .liveContainer, "LiveContainer in documents path must be detected")
     }
@@ -54,10 +58,11 @@ final class VPNManagerTests: XCTestCase {
             environment: [:],
             bundlePath: "/private/var/containers/Bundle/Application/ABCD1234/SomeOtherApp.app",
             bundleIdentifier: "com.unknown.app",
-            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/Documents"
+            documentsPath: "/var/mobile/Containers/Data/Application/XYZ/Documents",
+            isSimulator: false
         )
         XCTAssertEqual(env, .unknown, "Unrecognized bundle should return .unknown (not falsely liveContainer)")
-        XCTAssertTrue(env.isSupportedForSystemVPN, ".unknown should optimistically allow VPN")
+        XCTAssertFalse(env.isSupportedForSystemVPN, "Fail-safe: .unknown must NOT start a system VPN")
     }
     
     func testNoFalsePositiveLiveContainerDetection() {
@@ -65,9 +70,21 @@ final class VPNManagerTests: XCTestCase {
             environment: [:],
             bundlePath: "/private/var/containers/Bundle/Application/ABCD1234/Tunnexa.app",
             bundleIdentifier: "com.rakib.tunnexa",
-            documentsPath: nil
+            documentsPath: nil,
+            isSimulator: false
         )
         XCTAssertNotEqual(env, .liveContainer, "Must not falsely classify standalone as LiveContainer")
+    }
+    
+    func testSimulatorEnvironmentIsNotSupportedForSystemVPN() {
+        let env = VPNEnvironmentDetector.detectEnvironment(
+            environment: [:],
+            bundleIdentifier: "com.rakib.tunnexa",
+            isSimulator: true
+        )
+        XCTAssertEqual(env, .simulator)
+        XCTAssertFalse(env.isSupportedForSystemVPN)
+        XCTAssertTrue(VPNEnvironmentDetector.capabilities(for: env).canUseInAppProxy)
     }
     
     // MARK: - VPNErrorDetails Tests
