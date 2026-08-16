@@ -246,7 +246,7 @@ public struct SharedSettings {
             // that sees the new generation is guaranteed to also see the new
             // blob, never a torn half-updated snapshot.
             set(data, forKey: SettingsKey.proxyConfig)
-            configurationGeneration = configurationGeneration + 1
+            set(configurationGeneration + 1, forKey: SettingsKey.configurationGeneration)
             return true
         } catch {
             SharedLogging.log("Failed to encode configuration: \(error.localizedDescription)", category: .vpn, level: .error)
