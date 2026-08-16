@@ -121,10 +121,12 @@ final class RoutingTests: XCTestCase {
     }
 
     func testDirectAndBlockTargetsResolve() {
-        proxyServer.config = makeConfig(proxies: [SOCKS5Proxy(name: "Server-1", host: "127.0.0.1", port: 1080)], groups: [], rules: [])
+        let proxies = [SOCKS5Proxy(name: "Server-1", host: "127.0.0.1", port: 1080)]
+        proxyServer.config = makeConfig(proxies: proxies, groups: [], rules: [])
         XCTAssertEqual(proxyServer.resolveTarget("DIRECT"), .direct)
         XCTAssertEqual(proxyServer.resolveTarget("BLOCK"), .blocked)
-        XCTAssertEqual(proxyServer.resolveTarget("Server-1"), .proxy(SOCKS5Proxy(name: "Server-1", host: "127.0.0.1", port: 1080)))
+        XCTAssertEqual(proxyServer.resolveTarget("Server-1"), .proxy(proxies[0]),
+                       "Resolution must return the config's own proxy instance (stable id), not a copy")
         if case .failed = proxyServer.resolveTarget("DoesNotExist") {
             // expected
         } else {

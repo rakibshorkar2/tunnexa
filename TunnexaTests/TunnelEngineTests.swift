@@ -123,21 +123,29 @@ final class TunnelEngineTests: XCTestCase {
     }
 
     func testOnStopRequestedIsInvokedDuringStop() {
-        let stopRequested = expectation(description: "stop request delivered")
-        let runExited = expectation(description: "engine exit observed")
+        // The run loop stays blocked until stop() requests it to quit: that is
+        // the real-world shape (Tun2SocksKit blocks until quit() is called).
+        let release = DispatchSemaphore(value: 0)
         let engine = quickEngine { _ in
-            runExited.fulfill()
+            _ = release.wait(timeout: .now() + 5.0)
             return 0
         }
+        let stopRequested = expectation(description: "stop request delivered")
+        let runExited = expectation(description: "engine exit observed")
         engine.onStopRequested = {
             stopRequested.fulfill()
         }
+        engine.onExit = { _ in
+            runExited.fulfill()
+        }
         engine.start()
-        // Give the run closure a moment to enter the loop.
-        wait(for: [runExited], timeout: 5.0)
-        // Engine already exited: stop() must still invoke the stop request for
-        // engines that are still running (here: no-op but observed).
+        XCTAssertTrue(engine.isRunning)
+
         engine.stop(timeout: 0.5)
+        wait(for: [stopRequested], timeout: 1.0)
+
+        release.signal()
+        wait(for: [runExited], timeout: 5.0)
         XCTAssertFalse(engine.isRunning)
     }
 }

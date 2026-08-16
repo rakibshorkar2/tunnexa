@@ -113,7 +113,8 @@ final class VPNManagerTests: XCTestCase {
         XCTAssertEqual(details.environment, .liveContainer)
         XCTAssertTrue(details.userFriendlyExplanation.contains("LiveContainer"))
         XCTAssertTrue(details.userFriendlyExplanation.contains("standalone"))
-        XCTAssertFalse(details.userFriendlyExplanation.contains("SOCKS5 server"), "LiveContainer error must not blame SOCKS5 configuration")
+        XCTAssertTrue(details.userFriendlyExplanation.contains("not a SOCKS5 server or proxy configuration error"),
+                      "LiveContainer error must explicitly rule out SOCKS5 configuration blame")
     }
     
     func testErrorDetailsForPermissionDenied() {
