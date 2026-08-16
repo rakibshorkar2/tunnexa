@@ -8,11 +8,38 @@ import Network
 // No external network is required: every "remote" end is an NWListener in
 // this test process.
 
+/// Starts an NWListener and waits until it is ready (or failed).
+///
+/// `NWListener.port` reports raw value 0 until the listener transitions to
+/// `.ready`, so the assigned port must never be captured before readiness —
+/// otherwise clients connect to 127.0.0.1:0 and fail with EADDRNOTAVAIL.
+func startListenerAndWaitReady(_ listener: NWListener, queue: DispatchQueue) throws -> UInt16 {
+    let ready = DispatchSemaphore(value: 0)
+    var failure: NWError?
+    listener.stateUpdateHandler = { state in
+        switch state {
+        case .ready:
+            ready.signal()
+        case .failed(let error):
+            failure = error
+            ready.signal()
+        default:
+            break
+        }
+    }
+    listener.start(queue: queue)
+    ready.wait()
+    if let failure = failure {
+        throw failure
+    }
+    return listener.port!.rawValue
+}
+
 /// Picks a free loopback TCP port by binding and releasing a temporary listener.
 func allocateLoopbackPort() -> UInt16 {
     let listener = try! NWListener(using: .tcp, on: .any)
-    listener.start(queue: DispatchQueue(label: "com.rakib.tunnexa.tests.portalloc"))
-    let port = listener.port!.rawValue
+    let queue = DispatchQueue(label: "com.rakib.tunnexa.tests.portalloc")
+    let port = try! startListenerAndWaitReady(listener, queue: queue)
     listener.cancel()
     return port
 }
@@ -28,14 +55,13 @@ final class LoopbackEchoServer {
         let parameters = NWParameters.tcp
         parameters.requiredInterfaceType = .loopback
         listener = try NWListener(using: parameters, on: .any)
-        port = listener.port!.rawValue
+        port = try startListenerAndWaitReady(listener, queue: queue)
         listener.newConnectionHandler = { [weak self] connection in
             guard let self = self else { return }
             self.connections.append(connection)
             connection.start(queue: self.queue)
             self.echo(connection)
         }
-        listener.start(queue: queue)
     }
 
     private func echo(_ connection: NWConnection) {
@@ -413,14 +439,13 @@ final class MockSocksServer {
         parameters.requiredInterfaceType = .loopback
         let boundListener = try NWListener(using: parameters, on: .any)
         listener = boundListener
-        port = boundListener.port!.rawValue
+        port = try startListenerAndWaitReady(boundListener, queue: queue)
         boundListener.newConnectionHandler = { [weak self] connection in
             guard let self = self else { return }
             self.connections.append(connection)
             connection.start(queue: self.queue)
             self.handle(connection)
         }
-        boundListener.start(queue: queue)
     }
 
     private func handle(_ connection: NWConnection) {
