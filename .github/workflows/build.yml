@@ -98,19 +98,30 @@ jobs:
       - name: "PHASE 1/2: Build for Testing"
         run: |
           START=$(date +%s)
-          DEVICE_NAME=$(xcrun simctl list devices available -j | python3 -c "import json,sys; data=json.load(sys.stdin); devices=[d['name'] for runtime in data['devices'].values() for d in runtime if d['isAvailable']]; print(devices[0] if devices else 'iPhone 16')")
-          echo "Using simulator: $DEVICE_NAME"
+          DEVICE_JSON=$(xcrun simctl list devices available -j)
+          DEVICE_NAME=$(echo "$DEVICE_JSON" | python3 -c "import json,sys; data=json.load(sys.stdin); devices=[d['name'] for runtime in data['devices'].values() for d in runtime if d['isAvailable']]; print(devices[0] if devices else 'iPhone 16')")
+          DEVICE_UDID=$(echo "$DEVICE_JSON" | python3 -c "import json,sys; data=json.load(sys.stdin); devices=[d['udid'] for runtime in data['devices'].values() for d in runtime if d['isAvailable']]; print(devices[0] if devices else '')")
+          echo "Using simulator: $DEVICE_NAME ($DEVICE_UDID)"
           echo "DEVICE_NAME=$DEVICE_NAME" >> "$GITHUB_ENV"
+          echo "DEVICE_UDID=$DEVICE_UDID" >> "$GITHUB_ENV"
           xcodebuild build-for-testing \
             -project Tunnexa.xcodeproj \
             -scheme Tunnexa \
-            -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
+            -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
             -clonedSourcePackagesDirPath SourcePackages \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             ONLY_ACTIVE_ARCH=YES
           END=$(date +%s)
           echo "PHASE_DURATION build_for_testing_seconds=$((END-START))"
+
+      # Pre-boot the simulator and wait for bootstatus. `xcodebuild test` can
+      # hang for tens of minutes on hosted runners when it boots a cold
+      # simulator itself; booting first makes the test phase deterministic.
+      - name: Pre-Boot Simulator
+        run: |
+          xcrun simctl boot "$DEVICE_UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE_UDID" -b
 
       # PHASE 2/2: run ONLY the simulator-suitable subset, in parallel across
       # worker processes (each worker is its own xctest process, so the
@@ -135,7 +146,7 @@ jobs:
           xcodebuild test-without-building \
             -project Tunnexa.xcodeproj \
             -scheme Tunnexa \
-            -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
+            -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
             -clonedSourcePackagesDirPath SourcePackages \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
